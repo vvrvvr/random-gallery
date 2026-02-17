@@ -19,6 +19,8 @@
     font-family: Arial, sans-serif;
     background: #fff;
     overflow: hidden; /* галерея должна помещаться в окно без скролла */
+    height: 100vh;
+    height: 100dvh; /* modern mobile browsers */
   }
 
   body.modal-open {
@@ -33,13 +35,13 @@
   /* Adaptive mosaic grid (Yandex Disk-ish) */
   #gallery {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(var(--tile), 1fr));
-    /* Fill the viewport height with photos (no big empty area at the bottom) */
-    height: calc(100vh - 40px);
-    grid-auto-rows: minmax(calc(var(--tile) * 0.75), 1fr);
+    height: 100%;
+    grid-template-columns: repeat(var(--cols, 5), 1fr);
+    grid-template-rows: repeat(var(--rows, 4), 1fr);
     grid-auto-flow: dense;
     gap: var(--gap);
     align-content: stretch;
+    justify-content: stretch;
     overflow: hidden;
   }
 
@@ -136,18 +138,7 @@
     transform: scale(1);
   }
 
-  @media (max-width: 420px) {
-    #gallery {
-      grid-template-columns: 1fr;
-      grid-auto-rows: clamp(160px, 48vw, 240px);
-    }
 
-    .tile.wide,
-    .tile.tall {
-      grid-column: span 1;
-      grid-row: span 1;
-    }
-  }
 
   /* Overlay */
   .overlay {
@@ -268,14 +259,13 @@ function closeOverlay() {
 }
 
 // Render the grid structure immediately (placeholders), then fill images progressively.
-const { wideSet: initialWideSet, tallSet: initialTallSet } = buildAccentSets(tilesOnScreen);
 const photoSlots = [];
+let textTileEl = null;
+let storageKey = "";
 
-function createPhotoSlot(index, wideSet, tallSet) {
+function createPhotoSlot(index) {
   const tile = document.createElement("div");
   tile.className = "tile photo";
-  if (wideSet.has(index)) tile.classList.add("wide");
-  else if (tallSet.has(index)) tile.classList.add("tall");
 
   const img = document.createElement("img");
   img.className = "thumb";
@@ -431,53 +421,151 @@ async function getAvailableImageNumbers() {
   return found;
 }
 
-function buildAccentSets(tilesOnScreen, rnd = Math.random) {
-  const indices = Array.from({ length: tilesOnScreen }, (_, i) => i);
-  shuffle(indices, rnd);
+function solveMosaic(cols, rows, tileCount, rnd) {
+  const totalCells = cols * rows;
+  const occ = new Array(totalCells).fill(false);
+  const placements = [];
+  const shapes = [
+    { w: 2, h: 2 },
+    { w: 2, h: 1 },
+    { w: 1, h: 2 },
+    { w: 1, h: 1 },
+  ];
 
-  const maxWide = Math.max(1, Math.round(tilesOnScreen * 0.2));
-  const maxTall = Math.max(1, Math.round(tilesOnScreen * 0.15));
-  const picked = indices.slice(0, Math.min(indices.length, maxWide + maxTall));
+  function idx(x, y) {
+    return y * cols + x;
+  }
 
-  return {
-    wideSet: new Set(picked.slice(0, maxWide)),
-    tallSet: new Set(picked.slice(maxWide)),
-  };
-}
+  function findFirstEmpty() {
+    for (let i = 0; i < totalCells; i++) {
+      if (!occ[i]) return { x: i % cols, y: Math.floor(i / cols) };
+    }
+    return null;
+  }
 
-function getOrCreateLayoutSets(storageKey, tilesOnScreen) {
-  const key = `${storageKey}:layout`;
-  const raw = safeStorageGet(key);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const wide = parsed && Array.isArray(parsed.wide) ? parsed.wide : null;
-      const tall = parsed && Array.isArray(parsed.tall) ? parsed.tall : null;
-      if (
-        wide &&
-        tall &&
-        wide.every((n) => Number.isInteger(n) && n >= 0 && n < tilesOnScreen) &&
-        tall.every((n) => Number.isInteger(n) && n >= 0 && n < tilesOnScreen)
-      ) {
-        return { wideSet: new Set(wide), tallSet: new Set(tall) };
+  function canPlace(x, y, w, h) {
+    if (x + w > cols || y + h > rows) return false;
+    for (let yy = y; yy < y + h; yy++) {
+      for (let xx = x; xx < x + w; xx++) {
+        if (occ[idx(xx, yy)]) return false;
       }
-    } catch {
-      // ignore
+    }
+    return true;
+  }
+
+  function setOcc(x, y, w, h, v) {
+    for (let yy = y; yy < y + h; yy++) {
+      for (let xx = x; xx < x + w; xx++) {
+        occ[idx(xx, yy)] = v;
+      }
     }
   }
 
+  function backtrack(usedTiles, filledCells) {
+    if (usedTiles === tileCount) return filledCells === totalCells;
+
+    const remainingTiles = tileCount - usedTiles;
+    const remainingCells = totalCells - filledCells;
+    if (remainingCells < remainingTiles) return false; // need at least 1 cell per tile
+    if (remainingCells > remainingTiles * 4) return false; // max 2x2 per tile
+
+    const cell = findFirstEmpty();
+    if (!cell) return false;
+
+    // Deterministic per-user variety: shuffle trial order
+    const trial = shapes.slice();
+    shuffle(trial, rnd);
+
+    for (const s of trial) {
+      const area = s.w * s.h;
+      // Extra quick feasibility check after placing this shape
+      const nextRemainingCells = remainingCells - area;
+      const nextRemainingTiles = remainingTiles - 1;
+      if (nextRemainingCells < nextRemainingTiles) continue;
+      if (nextRemainingCells > nextRemainingTiles * 4) continue;
+
+      if (!canPlace(cell.x, cell.y, s.w, s.h)) continue;
+      setOcc(cell.x, cell.y, s.w, s.h, true);
+      placements.push({ x: cell.x, y: cell.y, w: s.w, h: s.h });
+
+      if (backtrack(usedTiles + 1, filledCells + area)) return true;
+
+      placements.pop();
+      setOcc(cell.x, cell.y, s.w, s.h, false);
+    }
+
+    return false;
+  }
+
+  return backtrack(0, 0) ? placements : null;
+}
+
+function pickMosaicLayout(containerW, containerH, tileCount) {
+  const target = containerW / Math.max(1, containerH);
+  const candidates = [
+    { cols: 3, rows: 4 },
+    { cols: 3, rows: 5 },
+    { cols: 4, rows: 4 },
+    { cols: 4, rows: 5 },
+    { cols: 5, rows: 4 },
+    { cols: 5, rows: 5 },
+    { cols: 6, rows: 4 },
+    { cols: 3, rows: 6 },
+    { cols: 2, rows: 6 },
+  ];
+
+  function score(c) {
+    const area = c.cols * c.rows;
+    if (area < tileCount) return Infinity;
+
+    const ratio = c.cols / c.rows;
+    const aspectDiff = Math.abs(ratio - target);
+    const cellMin = Math.min(containerW / c.cols, containerH / c.rows);
+
+    // Prefer not-too-tiny cells
+    const tinyPenalty = cellMin < 70 ? (70 - cellMin) / 10 : 0;
+
+    // Prefer moderate area (enough for mosaic, but not overly fragmented)
+    const areaTarget = tileCount * 1.8;
+    const areaPenalty = Math.abs(area - areaTarget) / tileCount;
+
+    return aspectDiff * 2 + areaPenalty + tinyPenalty;
+  }
+
+  return candidates
+    .map((c) => ({ ...c, s: score(c) }))
+    .sort((a, b) => a.s - b.s)
+    .map(({ cols, rows }) => ({ cols, rows }));
+}
+
+function applyMosaicLayout() {
+  const tiles = [...photoSlots.map((s) => s.tile), textTileEl].filter(Boolean);
+  if (!tiles.length || !storageKey) return;
+
+  const rect = gallery.getBoundingClientRect();
+  const w = Math.max(1, rect.width);
+  const h = Math.max(1, rect.height);
+
+  const candidates = pickMosaicLayout(w, h, tiles.length);
   const userSeed = getUserSeed();
-  const seed = fnv1a32(`${userSeed}|${storageKey}|layout|${tilesOnScreen}`);
-  const rnd = mulberry32(seed);
-  const sets = buildAccentSets(tilesOnScreen, rnd);
-  safeStorageSet(
-    key,
-    JSON.stringify({
-      wide: Array.from(sets.wideSet),
-      tall: Array.from(sets.tallSet),
-    })
-  );
-  return sets;
+
+  for (const c of candidates) {
+    const seed = fnv1a32(`${userSeed}|${storageKey}|mosaic|${c.cols}x${c.rows}`);
+    const rnd = mulberry32(seed);
+    const placements = solveMosaic(c.cols, c.rows, tiles.length, rnd);
+    if (!placements) continue;
+
+    gallery.style.setProperty("--cols", String(c.cols));
+    gallery.style.setProperty("--rows", String(c.rows));
+
+    tiles.forEach((tile, i) => {
+      const p = placements[i];
+      tile.style.gridColumn = `${p.x + 1} / span ${p.w}`;
+      tile.style.gridRow = `${p.y + 1} / span ${p.h}`;
+    });
+
+    return;
+  }
 }
 
 function fillPhotoSlot(slot, num, index) {
@@ -508,11 +596,9 @@ function fillPhotoSlot(slot, num, index) {
   };
 }
 
-function createTextTile(index, wideSet, tallSet) {
+function createTextTile() {
   const tile = document.createElement("div");
   tile.className = "tile text";
-  if (wideSet.has(index)) tile.classList.add("wide");
-  else if (tallSet.has(index)) tile.classList.add("tall");
 
   const h = document.createElement("h3");
   h.className = "text-title";
@@ -564,15 +650,25 @@ function showImage(index) {
 
 // Init: detect available images, then pick & persist a stable set for this user
 (async () => {
-  const storageKey = getStorageKey();
-  const { wideSet: initialWideSet, tallSet: initialTallSet } = getOrCreateLayoutSets(storageKey, tilesOnScreen);
+  storageKey = getStorageKey();
 
   // 1) Immediate structure (no white page)
   gallery.innerHTML = "";
+  photoSlots.length = 0;
   for (let i = 0; i < imagesToShow; i++) {
-    photoSlots.push(createPhotoSlot(i, initialWideSet, initialTallSet));
+    photoSlots.push(createPhotoSlot(i));
   }
-  gallery.appendChild(createTextTile(tilesOnScreen - 1, initialWideSet, initialTallSet));
+  textTileEl = createTextTile();
+  gallery.appendChild(textTileEl);
+
+  // Apply deterministic full-screen mosaic layout (no scroll, stable on refresh)
+  requestAnimationFrame(applyMosaicLayout);
+  if ("ResizeObserver" in window) {
+    const ro = new ResizeObserver(() => requestAnimationFrame(applyMosaicLayout));
+    ro.observe(gallery);
+  } else {
+    window.addEventListener("resize", () => requestAnimationFrame(applyMosaicLayout));
+  }
 
   // 2) If user already has a saved set, start loading it immediately (fast perceived load).
   // Debug/testing: reset the saved set via URL param, e.g. ?reset=1
