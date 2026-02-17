@@ -216,6 +216,10 @@
 </div>
 
 <script>
+// Global set id (controlled in this file).
+// Change this value (and redeploy) to roll a new stable "set" for all users of that deployed version.
+const SET_ID = "default";
+
 const imagesToShow = 10;
 const IMAGES_DIR = "images";
 const EXT = ".jpg";
@@ -287,6 +291,19 @@ function shuffle(arr) {
 
 function getStorageKey() {
   // localStorage is per-origin; add pathname so different pages don't conflict
+  const path = (location.pathname || "/").replace(/\/$/, "");
+
+  // Optional debug/testing override via URL, e.g. ?set=2
+  // Different "set" values produce independent saved selections.
+  const params = new URLSearchParams(location.search);
+  const urlSet = (params.get("set") || "").trim();
+  const set = (urlSet || SET_ID || "default").trim();
+
+  return `myImages:${path || "/"}:set=${set}`;
+}
+
+function getLegacyStorageKey() {
+  // Legacy key (before "set" support existed)
   const path = (location.pathname || "/").replace(/\/$/, "");
   return `myImages:${path || "/"}`;
 }
@@ -472,7 +489,36 @@ function showImage(index) {
 
   // 2) If user already has a saved set, start loading it immediately (fast perceived load).
   const storageKey = getStorageKey();
-  const savedRawEarly = safeStorageGet(storageKey);
+
+  // Debug/testing: reset the saved set via URL param, e.g. ?reset=1
+  // This makes it easy to get a new set without clearing all site storage.
+  const params = new URLSearchParams(location.search);
+  const resetParam = (params.get("reset") || "").trim().toLowerCase();
+  const shouldReset = resetParam === "1" || resetParam === "true" || resetParam === "yes";
+  if (shouldReset) {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Migrate legacy default key to "set=default" once, so existing users keep their set.
+  // This only affects users who visited before "set" support was introduced.
+  let savedRawEarly = safeStorageGet(storageKey);
+  if (!savedRawEarly && storageKey.endsWith("set=default")) {
+    const legacyKey = getLegacyStorageKey();
+    const legacyVal = safeStorageGet(legacyKey);
+    if (legacyVal) {
+      safeStorageSet(storageKey, legacyVal);
+      savedRawEarly = legacyVal;
+      try {
+        localStorage.removeItem(legacyKey);
+      } catch {
+        // ignore
+      }
+    }
+  }
   if (savedRawEarly) {
     try {
       const parsed = JSON.parse(savedRawEarly);
