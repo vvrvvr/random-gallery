@@ -169,20 +169,12 @@
 </div>
 
 <script>
-const totalImages = 70;
 const imagesToShow = 10;
-
-let saved = localStorage.getItem("myImages");
-let selectedImages;
-
-if (saved) {
-  selectedImages = JSON.parse(saved);
-} else {
-  let all = Array.from({length: totalImages}, (_, i) => i + 1);
-  all.sort(() => 0.5 - Math.random());
-  selectedImages = all.slice(0, imagesToShow);
-  localStorage.setItem("myImages", JSON.stringify(selectedImages));
-}
+const IMAGES_DIR = "images";
+const EXT = ".jpg";
+const PROBE_MAX = 500; // upper bound for numbered images like 1.jpg..N.jpg
+const PROBE_STOP_AFTER_MISSES = 25; // stop after N consecutive misses once we've found at least one
+const PROBE_TIMEOUT_MS = 2500;
 
 const overlay = document.getElementById("overlay");
 const overlayImg = document.getElementById("overlayImg");
@@ -190,31 +182,104 @@ const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
 const gallery = document.getElementById("gallery");
 
+let selectedImages = [];
 let currentIndex = 0;
 
-function pickUniqueIndices(n, k) {
-  const indices = Array.from({ length: n }, (_, i) => i);
-  indices.sort(() => Math.random() - 0.5);
-  return indices.slice(0, Math.max(0, Math.min(k, n)));
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
-// A few subtle accents: some tiles a bit wider or taller (not huge differences)
-const tilesOnScreen = imagesToShow + 1; // 10 photos + 1 text tile
-const maxWide = Math.max(1, Math.round(tilesOnScreen * 0.2));
-const maxTall = Math.max(1, Math.round(tilesOnScreen * 0.15));
-const picked = pickUniqueIndices(tilesOnScreen, maxWide + maxTall);
-const wideSet = new Set(picked.slice(0, maxWide));
-const tallSet = new Set(picked.slice(maxWide));
+function getStorageKey() {
+  // localStorage is per-origin; add pathname so different pages don't conflict
+  const path = (location.pathname || "/").replace(/\/$/, "");
+  return `myImages:${path || "/"}`;
+}
 
-// Создаём превьюшки
-selectedImages.forEach((num, index) => {
-  let tile = document.createElement("div");
+function safeStorageGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore (private mode / disabled storage)
+  }
+}
+
+function probeImage(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const t = setTimeout(() => {
+      img.onload = null;
+      img.onerror = null;
+      resolve(false);
+    }, PROBE_TIMEOUT_MS);
+
+    img.onload = () => {
+      clearTimeout(t);
+      resolve(true);
+    };
+    img.onerror = () => {
+      clearTimeout(t);
+      resolve(false);
+    };
+
+    // Add cache-busting? No — we *want* caching for speed.
+    img.src = url;
+  });
+}
+
+async function getAvailableImageNumbers() {
+  const found = [];
+  let misses = 0;
+  let foundAny = false;
+
+  for (let i = 1; i <= PROBE_MAX; i++) {
+    const ok = await probeImage(`${IMAGES_DIR}/${i}${EXT}`);
+    if (ok) {
+      found.push(i);
+      foundAny = true;
+      misses = 0;
+    } else if (foundAny) {
+      misses += 1;
+      if (misses >= PROBE_STOP_AFTER_MISSES) break;
+    }
+  }
+
+  return found;
+}
+
+function buildAccentSets(tilesOnScreen) {
+  const indices = Array.from({ length: tilesOnScreen }, (_, i) => i);
+  shuffle(indices);
+
+  const maxWide = Math.max(1, Math.round(tilesOnScreen * 0.2));
+  const maxTall = Math.max(1, Math.round(tilesOnScreen * 0.15));
+  const picked = indices.slice(0, Math.min(indices.length, maxWide + maxTall));
+
+  return {
+    wideSet: new Set(picked.slice(0, maxWide)),
+    tallSet: new Set(picked.slice(maxWide)),
+  };
+}
+
+function createPhotoTile(num, index, wideSet, tallSet) {
+  const tile = document.createElement("div");
   tile.className = "tile";
   if (wideSet.has(index)) tile.classList.add("wide");
   else if (tallSet.has(index)) tile.classList.add("tall");
 
-  let img = document.createElement("img");
-  img.src = "images/" + num + ".jpg";
+  const img = document.createElement("img");
+  img.src = `${IMAGES_DIR}/${num}${EXT}`;
   img.className = "thumb";
   img.loading = "lazy";
   img.decoding = "async";
@@ -227,12 +292,10 @@ selectedImages.forEach((num, index) => {
   });
 
   tile.appendChild(img);
-  gallery.appendChild(tile);
-});
+  return tile;
+}
 
-// 11-я "плитка" — текст (не кликается, не попадает в оверлей/листание)
-(() => {
-  const index = tilesOnScreen - 1;
+function createTextTile(index, wideSet, tallSet) {
   const tile = document.createElement("div");
   tile.className = "tile text";
   if (wideSet.has(index)) tile.classList.add("wide");
@@ -249,7 +312,6 @@ selectedImages.forEach((num, index) => {
 
   tile.appendChild(h);
   tile.appendChild(p);
-  gallery.appendChild(tile);
 
   // Keep title size stable, but scale the note text down when the tile is smaller.
   const NOTE_BASE_PX = 14;
@@ -257,12 +319,9 @@ selectedImages.forEach((num, index) => {
   const NOTE_STEP_PX = 0.5;
 
   function fitNoteText() {
-    // Reset to base before fitting
     let size = NOTE_BASE_PX;
     p.style.fontSize = `${size}px`;
 
-    // If it overflows, shrink until it fits or we hit minimum.
-    // (Only one element, so a small loop is fine.)
     let guard = 0;
     while (p.scrollHeight > p.clientHeight && size > NOTE_MIN_PX && guard < 30) {
       size = Math.max(NOTE_MIN_PX, size - NOTE_STEP_PX);
@@ -271,23 +330,70 @@ selectedImages.forEach((num, index) => {
     }
   }
 
-  // Initial fit after layout
   requestAnimationFrame(fitNoteText);
 
-  // Refit on resize (grid reflow / window resize)
   if ("ResizeObserver" in window) {
     const ro = new ResizeObserver(() => fitNoteText());
     ro.observe(tile);
   } else {
     window.addEventListener("resize", fitNoteText);
   }
-})();
 
-// Функция переключения фото
-function showImage(index) {
-  currentIndex = (index + imagesToShow) % imagesToShow; // циклически
-  overlayImg.src = "images/" + selectedImages[currentIndex] + ".jpg";
+  return tile;
 }
+
+function showImage(index) {
+  const count = selectedImages.length;
+  if (!count) return;
+  currentIndex = (index + count) % count; // cyclic
+  overlayImg.src = `${IMAGES_DIR}/${selectedImages[currentIndex]}${EXT}`;
+}
+
+// Init: detect available images, then pick & persist a stable set for this user
+(async () => {
+  const available = await getAvailableImageNumbers();
+  const availableSet = new Set(available);
+
+  const storageKey = getStorageKey();
+  const savedRaw = safeStorageGet(storageKey);
+  let saved = null;
+
+  if (savedRaw) {
+    try {
+      const parsed = JSON.parse(savedRaw);
+      if (Array.isArray(parsed)) saved = parsed;
+    } catch {
+      saved = null;
+    }
+  }
+
+  const desiredCount = Math.min(imagesToShow, available.length);
+
+  // Validate saved set: must be unique, correct length, and exist in the folder
+  const isValidSaved =
+    Array.isArray(saved) &&
+    saved.length === desiredCount &&
+    new Set(saved).size === saved.length &&
+    saved.every((n) => availableSet.has(n));
+
+  if (isValidSaved) {
+    selectedImages = saved;
+  } else {
+    selectedImages = shuffle([...available]).slice(0, desiredCount);
+    safeStorageSet(storageKey, JSON.stringify(selectedImages));
+  }
+
+  // Build layout (photos + 1 text tile)
+  gallery.innerHTML = "";
+  const tilesOnScreen = selectedImages.length + 1;
+  const { wideSet, tallSet } = buildAccentSets(tilesOnScreen);
+
+  selectedImages.forEach((num, index) => {
+    gallery.appendChild(createPhotoTile(num, index, wideSet, tallSet));
+  });
+
+  gallery.appendChild(createTextTile(tilesOnScreen - 1, wideSet, tallSet));
+})();
 
 // Кнопки навигации
 prevBtn.addEventListener("click", (e) => {
