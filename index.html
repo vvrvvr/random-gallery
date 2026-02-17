@@ -45,6 +45,36 @@
     grid-row: span 2;
   }
 
+  /* Photo tile placeholder (shows instantly while images are loading) */
+  .tile.photo {
+    background: #eef1f5;
+  }
+
+  .tile.photo::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      rgba(255,255,255,0) 0%,
+      rgba(255,255,255,0.55) 50%,
+      rgba(255,255,255,0) 100%
+    );
+    transform: translateX(-100%);
+    animation: shimmer 1.2s ease-in-out infinite;
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  .tile.photo.loaded::before {
+    display: none;
+  }
+
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
   /* Text tile (behaves like a tile, but isn't selectable / not part of overlay) */
   .tile.text {
     background: #f6f7f9;
@@ -82,6 +112,17 @@
     border-radius: 0;
     cursor: pointer;
     display: block;
+    opacity: 0;
+    filter: blur(18px);
+    transform: scale(1.03);
+    transition: opacity 220ms ease, filter 260ms ease, transform 260ms ease;
+    will-change: opacity, filter, transform;
+  }
+
+  img.thumb.loaded {
+    opacity: 1;
+    filter: blur(0);
+    transform: scale(1);
   }
 
   @media (max-width: 420px) {
@@ -174,7 +215,7 @@ const IMAGES_DIR = "images";
 const EXT = ".jpg";
 const PROBE_MAX = 500; // upper bound for numbered images like 1.jpg..N.jpg
 const PROBE_STOP_AFTER_MISSES = 25; // stop after N consecutive misses once we've found at least one
-const PROBE_TIMEOUT_MS = 2500;
+const PROBE_TIMEOUT_MS = 1800;
 
 const overlay = document.getElementById("overlay");
 const overlayImg = document.getElementById("overlayImg");
@@ -184,6 +225,28 @@ const gallery = document.getElementById("gallery");
 
 let selectedImages = [];
 let currentIndex = 0;
+const tilesOnScreen = imagesToShow + 1; // 10 photos + 1 text tile
+
+// Render the grid structure immediately (placeholders), then fill images progressively.
+const { wideSet: initialWideSet, tallSet: initialTallSet } = buildAccentSets(tilesOnScreen);
+const photoSlots = [];
+
+function createPhotoSlot(index, wideSet, tallSet) {
+  const tile = document.createElement("div");
+  tile.className = "tile photo";
+  if (wideSet.has(index)) tile.classList.add("wide");
+  else if (tallSet.has(index)) tile.classList.add("tall");
+
+  const img = document.createElement("img");
+  img.className = "thumb";
+  img.alt = "";
+  img.loading = "lazy";
+  img.decoding = "async";
+
+  tile.appendChild(img);
+  gallery.appendChild(tile);
+  return { tile, img };
+}
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -215,27 +278,42 @@ function safeStorageSet(key, value) {
   }
 }
 
-function probeImage(url) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    const t = setTimeout(() => {
-      img.onload = null;
-      img.onerror = null;
-      resolve(false);
-    }, PROBE_TIMEOUT_MS);
+async function probeImage(url) {
+  // Fast existence check (works well on GitHub Pages).
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+    let res = await fetch(url, { method: "HEAD", signal: ctrl.signal, cache: "force-cache" });
+    clearTimeout(t);
 
-    img.onload = () => {
-      clearTimeout(t);
-      resolve(true);
-    };
-    img.onerror = () => {
-      clearTimeout(t);
-      resolve(false);
-    };
+    // Some hosts may not support HEAD
+    if (res.status === 405) {
+      res = await fetch(url, { method: "GET", cache: "force-cache" });
+    }
 
-    // Add cache-busting? No — we *want* caching for speed.
-    img.src = url;
-  });
+    return res.ok;
+  } catch {
+    // Fallback: image probe (older browsers / odd fetch failures)
+    return await new Promise((resolve) => {
+      const img = new Image();
+      const t = setTimeout(() => {
+        img.onload = null;
+        img.onerror = null;
+        resolve(false);
+      }, PROBE_TIMEOUT_MS);
+
+      img.onload = () => {
+        clearTimeout(t);
+        resolve(true);
+      };
+      img.onerror = () => {
+        clearTimeout(t);
+        resolve(false);
+      };
+
+      img.src = url;
+    });
+  }
 }
 
 async function getAvailableImageNumbers() {
@@ -272,27 +350,31 @@ function buildAccentSets(tilesOnScreen) {
   };
 }
 
-function createPhotoTile(num, index, wideSet, tallSet) {
-  const tile = document.createElement("div");
-  tile.className = "tile";
-  if (wideSet.has(index)) tile.classList.add("wide");
-  else if (tallSet.has(index)) tile.classList.add("tall");
+function fillPhotoSlot(slot, num, index) {
+  const { tile, img } = slot;
+  img.classList.remove("loaded");
+  tile.classList.remove("loaded");
 
-  const img = document.createElement("img");
+  img.onload = () => {
+    img.classList.add("loaded");
+    tile.classList.add("loaded");
+  };
+  img.onerror = () => {
+    // Keep placeholder if missing/broken.
+    img.removeAttribute("src");
+    img.classList.remove("loaded");
+    tile.classList.remove("loaded");
+  };
+
   img.src = `${IMAGES_DIR}/${num}${EXT}`;
-  img.className = "thumb";
-  img.loading = "lazy";
-  img.decoding = "async";
 
-  img.addEventListener("click", () => {
+  // Attach click only for real photos
+  img.onclick = () => {
     currentIndex = index;
     overlayImg.src = img.src;
     overlay.classList.add("active");
     overlay.style.visibility = "visible";
-  });
-
-  tile.appendChild(img);
-  return tile;
+  };
 }
 
 function createTextTile(index, wideSet, tallSet) {
@@ -351,10 +433,34 @@ function showImage(index) {
 
 // Init: detect available images, then pick & persist a stable set for this user
 (async () => {
+  // 1) Immediate structure (no white page)
+  gallery.innerHTML = "";
+  for (let i = 0; i < imagesToShow; i++) {
+    photoSlots.push(createPhotoSlot(i, initialWideSet, initialTallSet));
+  }
+  gallery.appendChild(createTextTile(tilesOnScreen - 1, initialWideSet, initialTallSet));
+
+  // 2) If user already has a saved set, start loading it immediately (fast perceived load).
+  const storageKey = getStorageKey();
+  const savedRawEarly = safeStorageGet(storageKey);
+  if (savedRawEarly) {
+    try {
+      const parsed = JSON.parse(savedRawEarly);
+      if (Array.isArray(parsed) && parsed.length) {
+        selectedImages = parsed.slice(0, imagesToShow);
+        selectedImages.forEach((num, index) => {
+          if (photoSlots[index]) fillPhotoSlot(photoSlots[index], num, index);
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3) Ensure correctness: detect available images and (re)select a valid stable set.
   const available = await getAvailableImageNumbers();
   const availableSet = new Set(available);
 
-  const storageKey = getStorageKey();
   const savedRaw = safeStorageGet(storageKey);
   let saved = null;
 
@@ -383,16 +489,10 @@ function showImage(index) {
     safeStorageSet(storageKey, JSON.stringify(selectedImages));
   }
 
-  // Build layout (photos + 1 text tile)
-  gallery.innerHTML = "";
-  const tilesOnScreen = selectedImages.length + 1;
-  const { wideSet, tallSet } = buildAccentSets(tilesOnScreen);
-
+  // 4) Fill (or refill) slots with the final chosen images.
   selectedImages.forEach((num, index) => {
-    gallery.appendChild(createPhotoTile(num, index, wideSet, tallSet));
+    if (photoSlots[index]) fillPhotoSlot(photoSlots[index], num, index);
   });
-
-  gallery.appendChild(createTextTile(tilesOnScreen - 1, wideSet, tallSet));
 })();
 
 // Кнопки навигации
