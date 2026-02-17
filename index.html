@@ -5,14 +5,20 @@
 <title>Gallery</title>
 
 <style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
   html, body {
     height: 100%;
   }
 
   body {
-    margin: 20px;
+    margin: 0;
+    padding: 20px;
     font-family: Arial, sans-serif;
     background: #fff;
+    overflow: hidden; /* галерея должна помещаться в окно без скролла */
   }
 
   body.modal-open {
@@ -34,6 +40,7 @@
     grid-auto-flow: dense;
     gap: var(--gap);
     align-content: stretch;
+    overflow: hidden;
   }
 
   .tile {
@@ -281,12 +288,54 @@ function createPhotoSlot(index, wideSet, tallSet) {
   return { tile, img };
 }
 
-function shuffle(arr) {
+function shuffle(arr, rnd = Math.random) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rnd() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
+}
+
+function fnv1a32(str) {
+  // 32-bit FNV-1a hash
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  // Deterministic PRNG in [0,1)
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function getUserSeed() {
+  // One seed per browser/profile (per origin). Used to keep layout stable on refresh,
+  // while still being different across different users/browsers.
+  const KEY = "myImages:userSeed";
+  const existing = safeStorageGet(KEY);
+  if (existing) return existing;
+
+  let seed = "";
+  try {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    seed = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    seed = String(Date.now()) + ":" + String(Math.random());
+  }
+
+  safeStorageSet(KEY, seed);
+  return seed;
 }
 
 function getStorageKey() {
@@ -382,9 +431,9 @@ async function getAvailableImageNumbers() {
   return found;
 }
 
-function buildAccentSets(tilesOnScreen) {
+function buildAccentSets(tilesOnScreen, rnd = Math.random) {
   const indices = Array.from({ length: tilesOnScreen }, (_, i) => i);
-  shuffle(indices);
+  shuffle(indices, rnd);
 
   const maxWide = Math.max(1, Math.round(tilesOnScreen * 0.2));
   const maxTall = Math.max(1, Math.round(tilesOnScreen * 0.15));
@@ -394,6 +443,41 @@ function buildAccentSets(tilesOnScreen) {
     wideSet: new Set(picked.slice(0, maxWide)),
     tallSet: new Set(picked.slice(maxWide)),
   };
+}
+
+function getOrCreateLayoutSets(storageKey, tilesOnScreen) {
+  const key = `${storageKey}:layout`;
+  const raw = safeStorageGet(key);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const wide = parsed && Array.isArray(parsed.wide) ? parsed.wide : null;
+      const tall = parsed && Array.isArray(parsed.tall) ? parsed.tall : null;
+      if (
+        wide &&
+        tall &&
+        wide.every((n) => Number.isInteger(n) && n >= 0 && n < tilesOnScreen) &&
+        tall.every((n) => Number.isInteger(n) && n >= 0 && n < tilesOnScreen)
+      ) {
+        return { wideSet: new Set(wide), tallSet: new Set(tall) };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const userSeed = getUserSeed();
+  const seed = fnv1a32(`${userSeed}|${storageKey}|layout|${tilesOnScreen}`);
+  const rnd = mulberry32(seed);
+  const sets = buildAccentSets(tilesOnScreen, rnd);
+  safeStorageSet(
+    key,
+    JSON.stringify({
+      wide: Array.from(sets.wideSet),
+      tall: Array.from(sets.tallSet),
+    })
+  );
+  return sets;
 }
 
 function fillPhotoSlot(slot, num, index) {
@@ -480,6 +564,9 @@ function showImage(index) {
 
 // Init: detect available images, then pick & persist a stable set for this user
 (async () => {
+  const storageKey = getStorageKey();
+  const { wideSet: initialWideSet, tallSet: initialTallSet } = getOrCreateLayoutSets(storageKey, tilesOnScreen);
+
   // 1) Immediate structure (no white page)
   gallery.innerHTML = "";
   for (let i = 0; i < imagesToShow; i++) {
@@ -488,8 +575,6 @@ function showImage(index) {
   gallery.appendChild(createTextTile(tilesOnScreen - 1, initialWideSet, initialTallSet));
 
   // 2) If user already has a saved set, start loading it immediately (fast perceived load).
-  const storageKey = getStorageKey();
-
   // Debug/testing: reset the saved set via URL param, e.g. ?reset=1
   // This makes it easy to get a new set without clearing all site storage.
   const params = new URLSearchParams(location.search);
