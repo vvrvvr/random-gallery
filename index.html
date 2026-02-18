@@ -272,6 +272,11 @@ const IMAGES_DIR = "images";
 // Image format preference: try WebP first, fallback to JPG (useful while you convert gradually).
 const EXT_PRIMARY = ".webp";
 const EXT_FALLBACK = ".jpg";
+
+// Performance hint (recommended for mobile):
+// If your images are numbered 1..N without gaps, set this to N to skip network probing entirely.
+// Set to 0 to auto-detect (fast path assumes contiguous numbering; falls back to slower probing if needed).
+const IMAGES_COUNT = 51;
 const PROBE_MAX = 500; // upper bound for numbered images like 1.jpg..N.jpg
 const PROBE_STOP_AFTER_MISSES = 25; // stop after N consecutive misses once we've found at least one
 const PROBE_TIMEOUT_MS = 1800;
@@ -484,7 +489,7 @@ async function probeImageNumber(num) {
   return await probeImage(imageUrl(num, EXT_FALLBACK));
 }
 
-async function getAvailableImageNumbers() {
+async function getAvailableImageNumbersSlow() {
   const found = [];
   let misses = 0;
   let foundAny = false;
@@ -502,6 +507,59 @@ async function getAvailableImageNumbers() {
   }
 
   return found;
+}
+
+async function getAvailableImageNumbers() {
+  // Fast path:
+  // - if IMAGES_COUNT is provided, don't probe at all
+  // - otherwise, assume images are contiguous 1..N and find N with ~O(log N) probes
+  // If assumptions fail, fallback to the slow full scan.
+  if (Number.isInteger(IMAGES_COUNT) && IMAGES_COUNT > 0) {
+    return Array.from({ length: Math.min(IMAGES_COUNT, PROBE_MAX) }, (_, i) => i + 1);
+  }
+
+  try {
+    const firstOk = await probeImageNumber(1);
+    if (!firstOk) return [];
+
+    let lo = 1;
+    let hi = 2;
+
+    while (hi <= PROBE_MAX) {
+      const ok = await probeImageNumber(hi);
+      if (!ok) break;
+      lo = hi;
+      hi *= 2;
+    }
+
+    if (hi > PROBE_MAX) {
+      // Might still be < PROBE_MAX; verify PROBE_MAX itself
+      const okMax = await probeImageNumber(PROBE_MAX);
+      if (okMax) {
+        return Array.from({ length: PROBE_MAX }, (_, i) => i + 1);
+      }
+      hi = PROBE_MAX;
+    }
+
+    // Binary search last existing in [lo, hi)
+    let left = lo;
+    let right = Math.min(hi, PROBE_MAX + 1); // exclusive
+    while (left + 1 < right) {
+      const mid = left + Math.floor((right - left) / 2);
+      const ok = await probeImageNumber(mid);
+      if (ok) left = mid;
+      else right = mid;
+    }
+
+    const max = left;
+    if (max >= 1) {
+      return Array.from({ length: max }, (_, i) => i + 1);
+    }
+
+    return [];
+  } catch {
+    return await getAvailableImageNumbersSlow();
+  }
 }
 
 function solveMosaic(cols, rows, tileCount, rnd) {
