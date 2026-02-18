@@ -570,6 +570,23 @@ function applyMosaicLayout() {
 
 function fillPhotoSlot(slot, num, index) {
   const { tile, img } = slot;
+  const desiredNum = String(num);
+
+  // If this slot already shows the same image, don't reassign src / restart transitions.
+  // This prevents the "loads twice" effect (early load from localStorage + later validation pass).
+  if (img.dataset.num === desiredNum) {
+    // Ensure click is bound to this slot index.
+    img.onclick = () => {
+      currentIndex = index;
+      overlayImg.src = img.src;
+      overlay.classList.add("active");
+      overlay.style.visibility = "visible";
+      lockPageScroll();
+    };
+    return;
+  }
+
+  img.dataset.num = desiredNum;
   img.classList.remove("loaded");
   tile.classList.remove("loaded");
 
@@ -582,6 +599,7 @@ function fillPhotoSlot(slot, num, index) {
     img.removeAttribute("src");
     img.classList.remove("loaded");
     tile.classList.remove("loaded");
+    delete img.dataset.num;
   };
 
   img.src = `${IMAGES_DIR}/${num}${EXT}`;
