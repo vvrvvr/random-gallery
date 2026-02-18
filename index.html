@@ -247,7 +247,9 @@ const SET_ID = "set2";
 
 const imagesToShow = 10;
 const IMAGES_DIR = "images";
-const EXT = ".jpg";
+// Image format preference: try WebP first, fallback to JPG (useful while you convert gradually).
+const EXT_PRIMARY = ".webp";
+const EXT_FALLBACK = ".jpg";
 const PROBE_MAX = 500; // upper bound for numbered images like 1.jpg..N.jpg
 const PROBE_STOP_AFTER_MISSES = 25; // stop after N consecutive misses once we've found at least one
 const PROBE_TIMEOUT_MS = 1800;
@@ -429,13 +431,44 @@ async function probeImage(url) {
   }
 }
 
+function imageUrl(num, ext) {
+  return `${IMAGES_DIR}/${num}${ext}`;
+}
+
+function setImgSrcWithFallback(imgEl, num, onMissing) {
+  const desiredNum = String(num);
+  const primaryUrl = imageUrl(num, EXT_PRIMARY);
+  const fallbackUrl = imageUrl(num, EXT_FALLBACK);
+
+  imgEl.dataset.num = desiredNum;
+  imgEl.dataset.ext = "primary";
+  imgEl.src = primaryUrl;
+
+  imgEl.onerror = () => {
+    if (imgEl.dataset.ext === "primary") {
+      imgEl.dataset.ext = "fallback";
+      imgEl.src = fallbackUrl;
+      return;
+    }
+    // missing/broken
+    if (typeof onMissing === "function") onMissing();
+  };
+}
+
+async function probeImageNumber(num) {
+  // Prefer WebP but accept JPG during migration.
+  const primaryOk = await probeImage(imageUrl(num, EXT_PRIMARY));
+  if (primaryOk) return true;
+  return await probeImage(imageUrl(num, EXT_FALLBACK));
+}
+
 async function getAvailableImageNumbers() {
   const found = [];
   let misses = 0;
   let foundAny = false;
 
   for (let i = 1; i <= PROBE_MAX; i++) {
-    const ok = await probeImage(`${IMAGES_DIR}/${i}${EXT}`);
+    const ok = await probeImageNumber(i);
     if (ok) {
       found.push(i);
       foundAny = true;
@@ -614,7 +647,6 @@ function fillPhotoSlot(slot, num, index) {
     return;
   }
 
-  img.dataset.num = desiredNum;
   img.classList.remove("loaded");
   tile.classList.remove("loaded");
 
@@ -622,15 +654,15 @@ function fillPhotoSlot(slot, num, index) {
     img.classList.add("loaded");
     tile.classList.add("loaded");
   };
-  img.onerror = () => {
+
+  setImgSrcWithFallback(img, num, () => {
     // Keep placeholder if missing/broken.
     img.removeAttribute("src");
     img.classList.remove("loaded");
     tile.classList.remove("loaded");
     delete img.dataset.num;
-  };
-
-  img.src = `${IMAGES_DIR}/${num}${EXT}`;
+    delete img.dataset.ext;
+  });
 
   // Attach click only for real photos
   img.onclick = () => {
@@ -691,7 +723,12 @@ function showImage(index) {
   const count = selectedImages.length;
   if (!count) return;
   currentIndex = (index + count) % count; // cyclic
-  overlayImg.src = `${IMAGES_DIR}/${selectedImages[currentIndex]}${EXT}`;
+  overlayImg.classList.remove("loaded");
+  setImgSrcWithFallback(overlayImg, selectedImages[currentIndex], () => {
+    overlayImg.removeAttribute("src");
+    delete overlayImg.dataset.num;
+    delete overlayImg.dataset.ext;
+  });
 }
 
 // Init: detect available images, then pick & persist a stable set for this user
