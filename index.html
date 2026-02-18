@@ -116,6 +116,7 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
+    white-space: pre-line; /* \n в textContent -> новая строка */
   }
 
   img.thumb {
@@ -165,8 +166,9 @@
     background: rgba(0,0,0,0.3);
     color: rgba(255,255,255,0.95);
     font-size: 44px;
-    line-height: 74px;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
     user-select: none;
     z-index: 3; /* всегда выше изображения и кнопок листания */
@@ -765,25 +767,82 @@ function createTextTile() {
   const p = document.createElement("p");
   p.className = "text-body";
   p.textContent =
-    "Бесконечный цикл смертей и перерождений в предопределенной битве богов. Из массива фотографий каждый раз случайно формируется выборка из десяти работ";
+    "Бесконечный цикл смертей и перерождений в предопределенной битве богов.\n(Из массива фотографий каждый раз случайно формируется выборка из десяти работ)";
 
   tile.appendChild(h);
   tile.appendChild(p);
 
   // Keep title size stable, but scale the note text down when the tile is smaller.
   const NOTE_BASE_PX = 14;
-  const NOTE_MIN_PX = 10;
+  const NOTE_MIN_PX = 8;
   const NOTE_STEP_PX = 0.5;
+  const TITLE_BASE_PX = 18; // matches CSS default
+  const TITLE_MIN_PX = 14;
 
   function fitNoteText() {
-    let size = NOTE_BASE_PX;
-    p.style.fontSize = `${size}px`;
+    // Reset any previous clamping / inline tweaks
+    p.style.display = "";
+    p.style.webkitLineClamp = "";
+    p.style.webkitBoxOrient = "";
+    p.style.lineHeight = "";
+
+    tile.style.padding = "";
+    tile.style.gap = "";
+    h.style.fontSize = "";
+
+    let bodySize = NOTE_BASE_PX;
+    let lineHeight = 1.45;
+    let titleSize = TITLE_BASE_PX;
+
+    let padX = 16;
+    let padTop = 16;
+    let padBottom = 14;
+    let gap = 10;
+
+    const apply = () => {
+      p.style.fontSize = `${bodySize}px`;
+      p.style.lineHeight = String(lineHeight);
+      h.style.fontSize = `${titleSize}px`;
+      tile.style.gap = `${gap}px`;
+      tile.style.padding = `${padTop}px ${padX}px ${padBottom}px`;
+    };
+
+    apply();
 
     let guard = 0;
-    while (p.scrollHeight > p.clientHeight && size > NOTE_MIN_PX && guard < 30) {
-      size = Math.max(NOTE_MIN_PX, size - NOTE_STEP_PX);
-      p.style.fontSize = `${size}px`;
+    while (tile.scrollHeight > tile.clientHeight && guard < 90) {
+      if (bodySize > NOTE_MIN_PX) {
+        bodySize = Math.max(NOTE_MIN_PX, bodySize - NOTE_STEP_PX);
+      } else if (lineHeight > 1.15) {
+        lineHeight = Math.max(1.15, +(lineHeight - 0.05).toFixed(2));
+      } else if (titleSize > TITLE_MIN_PX) {
+        titleSize = Math.max(TITLE_MIN_PX, +(titleSize - 0.5).toFixed(1));
+      } else if (gap > 6) {
+        gap -= 1;
+      } else if (padX > 10 || padTop > 10 || padBottom > 9) {
+        padX = Math.max(10, padX - 1);
+        padTop = Math.max(10, padTop - 1);
+        padBottom = Math.max(9, padBottom - 1);
+      } else {
+        break;
+      }
+
+      apply();
       guard += 1;
+    }
+
+    // Absolute guarantee: clamp text so it never overflows the tile.
+    // (This only triggers in extremely small tiles.)
+    if (tile.scrollHeight > tile.clientHeight) {
+      const computed = window.getComputedStyle(p);
+      const fs = parseFloat(computed.fontSize) || NOTE_MIN_PX;
+      const lh = parseFloat(computed.lineHeight) || fs * 1.2;
+      const maxLines = Math.max(1, Math.floor(p.clientHeight / lh));
+
+      p.style.display = "-webkit-box";
+      p.style.webkitBoxOrient = "vertical";
+      p.style.webkitLineClamp = String(maxLines);
+      // `overflow: hidden` already in CSS
     }
   }
 
