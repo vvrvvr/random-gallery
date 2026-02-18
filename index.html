@@ -9,36 +9,14 @@
     box-sizing: border-box;
   }
 
-  /* Font setup: Diagramatika Text (custom font, as on ges-2.org) */
-  @font-face {
-    font-family: "Diagramatika Text";
-    src: url("fonts/DiagramatikaText-Regular.woff2") format("woff2");
-    font-weight: 400;
-    font-style: normal;
-    font-display: swap;
-  }
-  @font-face {
-    font-family: "Diagramatika Text";
-    src: url("fonts/DiagramatikaText-Bold.woff2") format("woff2");
-    font-weight: 700;
-    font-style: normal;
-    font-display: swap;
-  }
-
   html, body {
     height: 100%;
-  }
-
-  :root {
-    --font-sans: "Diagramatika Text", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    --gap: 1px;
-    --tile: clamp(140px, 18vw, 220px);
   }
 
   body {
     margin: 0;
     padding: 20px;
-    font-family: var(--font-sans);
+    font-family: Arial, sans-serif;
     background: #fff;
     overflow: hidden; /* галерея должна помещаться в окно без скролла */
     height: 100vh;
@@ -47,6 +25,11 @@
 
   body.modal-open {
     overflow: hidden; /* не показывать скролл и не прокручивать страницу под оверлеем */
+  }
+
+  :root {
+    --gap: 1px;
+    --tile: clamp(140px, 18vw, 220px);
   }
 
   /* Adaptive mosaic grid (Yandex Disk-ish) */
@@ -123,7 +106,6 @@
     font-size: 18px;
     line-height: 1.2;
     letter-spacing: 0.01em;
-    font-weight: 700;
   }
 
   .tile.text .text-body {
@@ -135,7 +117,6 @@
     min-height: 0;
     overflow: hidden;
     white-space: pre-line; /* \n в textContent -> новая строка */
-    font-weight: 400;
   }
 
   img.thumb {
@@ -314,7 +295,7 @@ const EXT_FALLBACK = ".jpg";
 // Performance hint (recommended for mobile):
 // If your images are numbered 1..N without gaps, set this to N to skip network probing entirely.
 // Set to 0 to auto-detect (fast path assumes contiguous numbering; falls back to slower probing if needed).
-const IMAGES_COUNT = 51;
+const IMAGES_COUNT = 58;
 const PROBE_MAX = 500; // upper bound for numbered images like 1.jpg..N.jpg
 const PROBE_STOP_AFTER_MISSES = 25; // stop after N consecutive misses once we've found at least one
 const PROBE_TIMEOUT_MS = 1800;
