@@ -183,6 +183,22 @@
     transform: scale(0.97);
   }
 
+  .counter {
+    position: fixed;
+    left: 50%;
+    bottom: 14px;
+    transform: translateX(-50%);
+    padding: 12px 18px;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.3);
+    color: rgba(255,255,255,0.95);
+    font-size: 21px;
+    line-height: 1;
+    user-select: none;
+    z-index: 3; /* поверх изображения */
+    cursor: default;
+  }
+
   .overlay.active {
     opacity: 1;
     visibility: visible;
@@ -244,6 +260,7 @@
 <div class="overlay" id="overlay">
   <button class="nav-btn" id="prevBtn">&#10094;</button>
   <button class="close-btn" id="closeBtn" aria-label="Закрыть">×</button>
+  <div class="counter" id="counter"></div>
   <img id="overlayImg">
   <button class="nav-btn" id="nextBtn">&#10095;</button>
 </div>
@@ -288,6 +305,7 @@ const overlayImg = document.getElementById("overlayImg");
 const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
 const closeBtn = document.getElementById("closeBtn");
+const counter = document.getElementById("counter");
 const gallery = document.getElementById("gallery");
 
 let selectedImages = [];
@@ -315,6 +333,15 @@ function closeOverlay() {
       unlockPageScroll();
     }
   }, 180); // совпадает с transition
+}
+
+function updateCounter() {
+  const count = selectedImages.length;
+  if (!count) {
+    counter.textContent = "";
+    return;
+  }
+  counter.textContent = `${currentIndex + 1} / ${count}`;
 }
 
 // Render the grid structure immediately (placeholders), then fill images progressively.
@@ -748,8 +775,7 @@ function fillPhotoSlot(slot, num, index) {
 
   // Attach click only for real photos
   img.onclick = () => {
-    currentIndex = index;
-    overlayImg.src = img.src;
+    showImage(index);
     overlay.classList.add("active");
     overlay.style.visibility = "visible";
     lockPageScroll();
@@ -862,6 +888,7 @@ function showImage(index) {
   const count = selectedImages.length;
   if (!count) return;
   currentIndex = (index + count) % count; // cyclic
+  updateCounter();
   overlayImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayImg, selectedImages[currentIndex], () => {
     overlayImg.removeAttribute("src");
@@ -1003,6 +1030,9 @@ closeBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   closeOverlay();
 });
+
+// Не закрывать при клике по счётчику
+counter.addEventListener("click", (e) => e.stopPropagation());
 </script>
 
 </body>
