@@ -154,6 +154,32 @@
     cursor: pointer; /* клик по фону закрывает */
   }
 
+  .close-btn {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    width: 57px;
+    height: 57px;
+    border-radius: 999px;
+    border: none;
+    background: rgba(0,0,0,0.45);
+    color: rgba(255,255,255,0.95);
+    font-size: 34px;
+    line-height: 57px;
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+    z-index: 3; /* всегда выше изображения и кнопок листания */
+  }
+
+  .close-btn:hover {
+    background: rgba(0,0,0,0.6);
+  }
+
+  .close-btn:active {
+    transform: scale(0.98);
+  }
+
   .overlay.active {
     opacity: 1;
     visibility: visible;
@@ -209,6 +235,7 @@
 
 <div class="overlay" id="overlay">
   <button class="nav-btn" id="prevBtn">&#10094;</button>
+  <button class="close-btn" id="closeBtn" aria-label="Закрыть">×</button>
   <img id="overlayImg">
   <button class="nav-btn" id="nextBtn">&#10095;</button>
 </div>
@@ -229,6 +256,7 @@ const overlay = document.getElementById("overlay");
 const overlayImg = document.getElementById("overlayImg");
 const prevBtn = document.getElementById("prevBtn");
 const nextBtn = document.getElementById("nextBtn");
+const closeBtn = document.getElementById("closeBtn");
 const gallery = document.getElementById("gallery");
 
 let selectedImages = [];
@@ -786,6 +814,12 @@ overlay.addEventListener("click", closeOverlay);
 
 // Не закрывать при клике по самому изображению
 overlayImg.addEventListener("click", (e) => e.stopPropagation());
+
+// Кнопка закрытия всегда поверх изображения
+closeBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeOverlay();
+});
 </script>
 
 </body>
