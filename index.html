@@ -282,9 +282,9 @@
   <button class="close-btn" id="closeBtn" aria-label="Закрыть">×</button>
   <div class="counter" id="counter"></div>
   <div class="stage" id="stage" aria-label="Просмотр фото">
-    <div class="slide" data-slot="prev"><img class="overlay-photo" id="overlayPrevImg" alt=""></div>
-    <div class="slide" data-slot="current"><img class="overlay-photo" id="overlayCurrImg" alt=""></div>
-    <div class="slide" data-slot="next"><img class="overlay-photo" id="overlayNextImg" alt=""></div>
+    <div class="slide" data-slot="prev"><img class="overlay-photo" id="overlayPrevImg" alt="" draggable="false"></div>
+    <div class="slide" data-slot="current"><img class="overlay-photo" id="overlayCurrImg" alt="" draggable="false"></div>
+    <div class="slide" data-slot="next"><img class="overlay-photo" id="overlayNextImg" alt="" draggable="false"></div>
   </div>
   <button class="nav-btn" id="nextBtn">&#10095;</button>
 </div>
@@ -354,9 +354,42 @@ const swipe = {
   startX: 0,
   dx: 0,
   animating: false,
+  timer: null,
+  animToken: 0,
   suppressClick: false,
   lastMoveAt: 0,
 };
+
+function getCurrentDxPx() {
+  const t = window.getComputedStyle(currSlide).transform;
+  if (!t || t === "none") return 0;
+  const m2 = t.match(/^matrix\((.+)\)$/);
+  if (m2) {
+    const parts = m2[1].split(",").map((v) => parseFloat(v.trim()));
+    return Number.isFinite(parts[4]) ? parts[4] : 0;
+  }
+  const m3 = t.match(/^matrix3d\((.+)\)$/);
+  if (m3) {
+    const parts = m3[1].split(",").map((v) => parseFloat(v.trim()));
+    return Number.isFinite(parts[12]) ? parts[12] : 0;
+  }
+  return 0;
+}
+
+function cancelSwipeAnimation() {
+  if (!swipe.animating) return;
+  swipe.animToken += 1; // invalidate pending timers
+  if (swipe.timer) {
+    window.clearTimeout(swipe.timer);
+    swipe.timer = null;
+  }
+  swipe.animating = false;
+
+  // Freeze at current position so we can drag from here
+  const dx = getCurrentDxPx();
+  swipe.dx = dx;
+  setSlideTransform(dx, { animate: false });
+}
 
 function stageWidth() {
   const rect = stage.getBoundingClientRect();
@@ -421,12 +454,15 @@ function animateBy(delta) {
 
   const dist = slideDistancePx();
   swipe.animating = true;
+  swipe.animToken += 1;
+  const token = swipe.animToken;
 
   // delta: +1 => next (swipe left), -1 => prev (swipe right)
   const targetDx = -delta * dist;
   setSlideTransform(targetDx, { animate: true });
 
-  window.setTimeout(() => {
+  swipe.timer = window.setTimeout(() => {
+    if (token !== swipe.animToken) return;
     currentIndex = wrapIndex(currentIndex + delta);
     updateCounter();
     updateOverlaySlides();
@@ -434,6 +470,7 @@ function animateBy(delta) {
     setSlideTransform(0, { animate: false });
     swipe.dx = 0;
     swipe.animating = false;
+    swipe.timer = null;
   }, SLIDE_ANIM_MS + 20);
 }
 
@@ -453,6 +490,7 @@ function unlockPageScroll() {
 function closeOverlay() {
   overlay.classList.remove("active");
   // Reset swipe state so next open starts centered
+  cancelSwipeAnimation();
   swipe.active = false;
   swipe.pointerId = null;
   swipe.dx = 0;
@@ -1151,17 +1189,18 @@ nextBtn.addEventListener("click", (e) => {
 // Swipe + close on background tap
 stage.addEventListener("pointerdown", (e) => {
   if (!overlay.classList.contains("active")) return;
-  if (swipe.animating) return;
+  // If animation is still running, allow "grab" mid-flight (Telegram-like).
+  if (swipe.animating) cancelSwipeAnimation();
 
   swipe.active = true;
   swipe.pointerId = e.pointerId;
-  swipe.startX = e.clientX;
-  swipe.dx = 0;
+  // Continue dragging from the current translateX
+  swipe.startX = e.clientX - (swipe.dx || 0);
   swipe.suppressClick = false;
   swipe.lastMoveAt = performance.now();
 
   stage.classList.add("dragging");
-  setSlideTransform(0, { animate: false });
+  setSlideTransform(swipe.dx || 0, { animate: false });
 
   try {
     stage.setPointerCapture(e.pointerId);
@@ -1172,6 +1211,12 @@ stage.addEventListener("pointerdown", (e) => {
   // Prevent long-press selection / browser gestures
   e.preventDefault();
 }, { capture: true });
+
+// Prevent native "drag image" behavior on desktop browsers
+stage.addEventListener("dragstart", (e) => e.preventDefault(), { capture: true });
+overlayPrevImg.addEventListener("dragstart", (e) => e.preventDefault());
+overlayCurrImg.addEventListener("dragstart", (e) => e.preventDefault());
+overlayNextImg.addEventListener("dragstart", (e) => e.preventDefault());
 
 stage.addEventListener("pointermove", (e) => {
   if (!swipe.active) return;
@@ -1205,11 +1250,15 @@ function finishSwipe() {
   if (delta === 0) {
     // Snap back
     swipe.animating = true;
+    swipe.animToken += 1;
+    const token = swipe.animToken;
     setSlideTransform(0, { animate: true });
-    window.setTimeout(() => {
+    swipe.timer = window.setTimeout(() => {
+      if (token !== swipe.animToken) return;
       setSlideTransform(0, { animate: false });
       swipe.dx = 0;
       swipe.animating = false;
+      swipe.timer = null;
     }, SLIDE_ANIM_MS + 20);
     return;
   }
