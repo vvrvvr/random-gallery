@@ -386,6 +386,7 @@ const swipe = {
   animating: false,
   timer: null,
   animToken: 0,
+  animDelta: 0,
   suppressClick: false,
   startAt: 0,
   lastX: 0,
@@ -595,11 +596,20 @@ function cancelSwipeAnimation() {
   }
   swipe.animating = false;
 
-  // Freeze at current position so we can drag from here
-  const dx = getCurrentDxPx();
-  swipe.dx = dx;
+  // If user interrupts an in-flight flip, commit it immediately.
+  if (swipe.animDelta) {
+    currentIndex = wrapIndex(currentIndex + swipe.animDelta);
+    updateCounter();
+    updateOverlaySlides();
+    resetZoom();
+    requestAnimationFrame(updateZoomBaseSize);
+    prefetchAround();
+  }
+
+  swipe.animDelta = 0;
+  swipe.dx = 0;
   swipe.vx = 0;
-  setSlideTransform(dx, { animate: false });
+  setSlideTransform(0, { animate: false });
 }
 
 function stageWidth() {
@@ -686,6 +696,7 @@ function animateBy(delta) {
   swipe.animating = true;
   swipe.animToken += 1;
   const token = swipe.animToken;
+  swipe.animDelta = delta;
 
   // delta: +1 => next (swipe left), -1 => prev (swipe right)
   const targetDx = -delta * dist;
@@ -702,6 +713,7 @@ function animateBy(delta) {
     // snap back to the centered state without animation
     setSlideTransform(0, { animate: false });
     swipe.dx = 0;
+    swipe.animDelta = 0;
     swipe.animating = false;
     swipe.timer = null;
   }, SLIDE_ANIM_MS + 20);
@@ -1642,6 +1654,7 @@ function finishSwipe() {
     swipe.animating = true;
     swipe.animToken += 1;
     const token = swipe.animToken;
+    swipe.animDelta = 0;
     setSlideTransform(0, { animate: true });
     swipe.timer = window.setTimeout(() => {
       if (token !== swipe.animToken) return;
