@@ -237,7 +237,6 @@
     transform-origin: center center;
     will-change: transform;
     opacity: 0;
-    transition: opacity 160ms ease;
     pointer-events: auto; /* still allow starting a drag from the photo */
     user-select: none;
     -webkit-user-drag: none;
@@ -245,6 +244,17 @@
 
   .slide img.loaded {
     opacity: 1;
+  }
+
+  /* Overlay photos: smooth snap-back / double-tap zoom; disable during active dragging */
+  .overlay-photo {
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transition: opacity 160ms ease, transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1);
+  }
+
+  .stage.dragging .overlay-photo {
+    transition: opacity 160ms ease; /* no transform tween while finger is down */
   }
 
   /* .overlay.active .slide img transform removed: JS handles zoom */
@@ -401,28 +411,17 @@ function clamp(v, min, max) {
 }
 
 function applyZoom() {
-  overlayCurrImg.style.transition = "none";
   overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
 }
 
 function updateZoomBaseSize() {
-  // Measure at zoom=1/pan=0 only
-  const prevZoom = zoomState.zoom;
-  const prevPanX = zoomState.panX;
-  const prevPanY = zoomState.panY;
-  zoomState.zoom = 1;
-  zoomState.panX = 0;
-  zoomState.panY = 0;
-  applyZoom();
-
+  // Base size at zoom=1 can be derived from the current rect size.
   const r = overlayCurrImg.getBoundingClientRect();
-  zoomState.baseW = r.width || zoomState.baseW || 0;
-  zoomState.baseH = r.height || zoomState.baseH || 0;
-
-  zoomState.zoom = prevZoom;
-  zoomState.panX = prevPanX;
-  zoomState.panY = prevPanY;
-  applyZoom();
+  const z = zoomState.zoom || 1;
+  const bw = r.width / z;
+  const bh = r.height / z;
+  zoomState.baseW = (Number.isFinite(bw) && bw > 0) ? bw : (zoomState.baseW || 0);
+  zoomState.baseH = (Number.isFinite(bh) && bh > 0) ? bh : (zoomState.baseH || 0);
 }
 
 function clampPan() {
@@ -472,19 +471,6 @@ function applyPanWithResistance() {
   applyZoom();
 }
 
-function snapPanBack() {
-  const { maxX, maxY } = getPanBounds();
-  const targetX = clamp(zoomState.panX, -maxX, maxX);
-  const targetY = clamp(zoomState.panY, -maxY, maxY);
-  zoomState.panX = targetX;
-  zoomState.panY = targetY;
-  overlayCurrImg.style.transition = "transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1)";
-  overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
-  window.setTimeout(() => {
-    overlayCurrImg.style.transition = "none";
-  }, 220);
-}
-
 function resetZoom() {
   zoomState.zoom = 1;
   zoomState.panX = 0;
@@ -513,12 +499,7 @@ function toggleZoomAt(clientX, clientY) {
     zoomState.panY = (tapY - cy) * (1 - z);
     clampPan();
   }
-
-  overlayCurrImg.style.transition = "transform 200ms cubic-bezier(0.2, 0.9, 0.2, 1)";
-  overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
-  window.setTimeout(() => {
-    overlayCurrImg.style.transition = "none";
-  }, 240);
+  applyZoom();
 }
 
 function addZoomPointer(e) {
@@ -1665,7 +1646,10 @@ stage.addEventListener("pointerup", (e) => {
   if (zoomState.pointers.size === 0) {
     stage.classList.remove("dragging");
     if (zoomState.zoom <= 1.02) resetZoom();
-    else snapPanBack();
+    else {
+      clampPan();
+      applyZoom(); // snaps back with CSS transition (no flicker)
+    }
     zoomState.mode = "none";
   } else if (zoomState.pointers.size === 1) {
     // If one finger remains after pinch, continue panning if zoomed in
