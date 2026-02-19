@@ -673,51 +673,6 @@ function unlockPageScroll() {
   document.body.style.paddingRight = "";
 }
 
-function applyOverlayZoomCompensation() {
-  // If the page is pinch-zoomed (mobile browsers), the overlay will inherit that zoom.
-  // We can't reliably reset viewport zoom from JS, so we counter-scale the overlay to appear normal.
-  const vv = window.visualViewport;
-  if (!vv) return;
-
-  const s = vv.scale || 1;
-  if (s === 1) {
-    overlay.style.transform = "";
-    overlay.style.transformOrigin = "";
-    overlay.style.left = "";
-    overlay.style.top = "";
-    overlay.style.right = "";
-    overlay.style.bottom = "";
-    overlay.style.width = "";
-    overlay.style.height = "";
-    return;
-  }
-
-  const inv = 1 / s;
-  overlay.style.transformOrigin = "0 0";
-  overlay.style.left = "0";
-  overlay.style.top = "0";
-  overlay.style.right = "auto";
-  overlay.style.bottom = "auto";
-
-  // Expand so after scaling it covers the visual viewport.
-  overlay.style.width = `${vv.width * s}px`;
-  overlay.style.height = `${vv.height * s}px`;
-
-  // translate is affected by scale(inv), so multiply offsets by s
-  overlay.style.transform = `translate(${vv.offsetLeft * s}px, ${vv.offsetTop * s}px) scale(${inv})`;
-}
-
-function clearOverlayZoomCompensation() {
-  overlay.style.transform = "";
-  overlay.style.transformOrigin = "";
-  overlay.style.left = "";
-  overlay.style.top = "";
-  overlay.style.right = "";
-  overlay.style.bottom = "";
-  overlay.style.width = "";
-  overlay.style.height = "";
-}
-
 function closeOverlay() {
   overlay.classList.remove("active");
   // Reset swipe state so next open starts centered
@@ -733,7 +688,6 @@ function closeOverlay() {
   swipe.animating = false;
   stage.classList.remove("dragging");
   setSlideTransform(0, { animate: false });
-  clearOverlayZoomCompensation();
   setTimeout(() => {
     if (!overlay.classList.contains("active")) {
       overlay.style.visibility = "hidden";
@@ -755,16 +709,6 @@ function updateCounter() {
 const photoSlots = [];
 let textTileEl = null;
 let storageKey = "";
-
-// Keep overlay aligned when user pinch-zooms or pans the page (mobile).
-if (window.visualViewport) {
-  const vv = window.visualViewport;
-  const sync = () => {
-    if (overlay.classList.contains("active")) applyOverlayZoomCompensation();
-  };
-  vv.addEventListener("resize", sync);
-  vv.addEventListener("scroll", sync);
-}
 
 function createPhotoSlot(index) {
   const tile = document.createElement("div");
@@ -1206,7 +1150,6 @@ function fillPhotoSlot(slot, num, index) {
       overlay.classList.add("active");
       overlay.style.visibility = "visible";
       lockPageScroll();
-      requestAnimationFrame(applyOverlayZoomCompensation);
     };
     return;
   }
@@ -1234,7 +1177,6 @@ function fillPhotoSlot(slot, num, index) {
     overlay.classList.add("active");
     overlay.style.visibility = "visible";
     lockPageScroll();
-    requestAnimationFrame(applyOverlayZoomCompensation);
   };
 }
 
