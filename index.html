@@ -246,11 +246,11 @@
   .overlay-photo {
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
-    transition: transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1);
+    transition: none; /* zoom/pan animations are done via Web Animations API to avoid mobile flicker */
   }
 
   .stage.dragging .overlay-photo {
-    transition: none; /* no tween while finger is down */
+    transition: none;
   }
 
   /* .overlay.active .slide img transform removed: JS handles zoom */
@@ -400,6 +400,7 @@ const zoomState = {
   lastTapX: 0,
   lastTapY: 0,
   doubleTapZoom: 2.2,
+  anim: null,
 };
 
 function clamp(v, min, max) {
@@ -408,6 +409,54 @@ function clamp(v, min, max) {
 
 function applyZoom() {
   overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
+}
+
+function transformStr(panX, panY, zoom) {
+  return `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
+}
+
+function cancelZoomAnim() {
+  if (zoomState.anim) {
+    try {
+      zoomState.anim.cancel();
+    } catch {
+      // ignore
+    }
+    zoomState.anim = null;
+  }
+}
+
+function animateZoomTo({ panX, panY, zoom }, { duration = 180, easing = "cubic-bezier(0.2, 0.9, 0.2, 1)" } = {}) {
+  cancelZoomAnim();
+
+  const from = overlayCurrImg.style.transform || transformStr(zoomState.panX, zoomState.panY, zoomState.zoom);
+  const to = transformStr(panX, panY, zoom);
+
+  // Update state immediately so subsequent logic reads the target.
+  zoomState.panX = panX;
+  zoomState.panY = panY;
+  zoomState.zoom = zoom;
+
+  // Ensure a baseline transform is set (important for Safari).
+  overlayCurrImg.style.transform = from;
+
+  try {
+    zoomState.anim = overlayCurrImg.animate(
+      [{ transform: from }, { transform: to }],
+      { duration, easing, fill: "forwards" }
+    );
+    zoomState.anim.onfinish = () => {
+      overlayCurrImg.style.transform = to;
+      zoomState.anim = null;
+    };
+    zoomState.anim.oncancel = () => {
+      zoomState.anim = null;
+    };
+  } catch {
+    // WAAPI not supported -> fallback to immediate set
+    overlayCurrImg.style.transform = to;
+    zoomState.anim = null;
+  }
 }
 
 function updateZoomBaseSize() {
@@ -461,6 +510,7 @@ function withRubberBand(value, maxAbs, k = 0.35) {
 }
 
 function applyPanWithResistance() {
+  cancelZoomAnim();
   const { maxX, maxY } = getPanBounds();
   zoomState.panX = withRubberBand(zoomState.panX, maxX);
   zoomState.panY = withRubberBand(zoomState.panY, maxY);
@@ -468,6 +518,7 @@ function applyPanWithResistance() {
 }
 
 function resetZoom() {
+  cancelZoomAnim();
   zoomState.zoom = 1;
   zoomState.panX = 0;
   zoomState.panY = 0;
@@ -483,19 +534,19 @@ function toggleZoomAt(clientX, clientY) {
   const cy = sr.height / 2;
 
   if (zoomState.zoom > 1.02) {
-    zoomState.zoom = 1;
-    zoomState.panX = 0;
-    zoomState.panY = 0;
+    animateZoomTo({ panX: 0, panY: 0, zoom: 1 }, { duration: 200 });
   } else {
     updateZoomBaseSize();
     const z = clamp(zoomState.doubleTapZoom, 1, zoomState.maxZoom);
     // Keep the tapped point in place while zooming (Telegram-like)
+    const panX = (tapX - cx) * (1 - z);
+    const panY = (tapY - cy) * (1 - z);
     zoomState.zoom = z;
-    zoomState.panX = (tapX - cx) * (1 - z);
-    zoomState.panY = (tapY - cy) * (1 - z);
+    zoomState.panX = panX;
+    zoomState.panY = panY;
     clampPan();
+    animateZoomTo({ panX: zoomState.panX, panY: zoomState.panY, zoom: zoomState.zoom }, { duration: 200 });
   }
-  applyZoom();
 }
 
 function addZoomPointer(e) {
@@ -1423,6 +1474,7 @@ stage.addEventListener("pointerdown", (e) => {
   if (!overlay.classList.contains("active")) return;
   if (swipe.animating) cancelSwipeAnimation();
 
+  cancelZoomAnim();
   addZoomPointer(e);
 
   try {
@@ -1634,8 +1686,10 @@ stage.addEventListener("pointerup", (e) => {
     stage.classList.remove("dragging");
     if (zoomState.zoom <= 1.02) resetZoom();
     else {
-      clampPan();
-      applyZoom(); // snaps back with CSS transition (no flicker)
+      const { maxX, maxY } = getPanBounds();
+      const targetX = clamp(zoomState.panX, -maxX, maxX);
+      const targetY = clamp(zoomState.panY, -maxY, maxY);
+      animateZoomTo({ panX: targetX, panY: targetY, zoom: zoomState.zoom }, { duration: 180 });
     }
     zoomState.mode = "none";
   } else if (zoomState.pointers.size === 1) {
