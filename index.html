@@ -226,27 +226,6 @@
     overflow: hidden;
   }
 
-  /* Overlay slide placeholder (while image is loading) */
-  .slide::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      rgba(255,255,255,0) 0%,
-      rgba(255,255,255,0.35) 50%,
-      rgba(255,255,255,0) 100%
-    );
-    transform: translateX(-100%);
-    animation: shimmer 1.2s ease-in-out infinite;
-    opacity: 0.6;
-    pointer-events: none;
-  }
-
-  .slide.loaded::before {
-    display: none;
-  }
-
   .slide img {
     max-width: 95vw;
     max-height: 95vh;
@@ -649,7 +628,6 @@ function updateOverlaySlides() {
   const iCurr = wrapIndex(currentIndex);
   const iNext = wrapIndex(currentIndex + 1);
 
-  prevSlide.classList.remove("loaded");
   overlayPrevImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayPrevImg, selectedImages[iPrev], () => {
     overlayPrevImg.removeAttribute("src");
@@ -657,10 +635,8 @@ function updateOverlaySlides() {
     delete overlayPrevImg.dataset.ext;
   }, () => {
     overlayPrevImg.classList.add("loaded");
-    prevSlide.classList.add("loaded");
   });
 
-  currSlide.classList.remove("loaded");
   overlayCurrImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayCurrImg, selectedImages[iCurr], () => {
     overlayCurrImg.removeAttribute("src");
@@ -668,10 +644,8 @@ function updateOverlaySlides() {
     delete overlayCurrImg.dataset.ext;
   }, () => {
     overlayCurrImg.classList.add("loaded");
-    currSlide.classList.add("loaded");
   });
 
-  nextSlide.classList.remove("loaded");
   overlayNextImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayNextImg, selectedImages[iNext], () => {
     overlayNextImg.removeAttribute("src");
@@ -679,7 +653,6 @@ function updateOverlaySlides() {
     delete overlayNextImg.dataset.ext;
   }, () => {
     overlayNextImg.classList.add("loaded");
-    nextSlide.classList.add("loaded");
   });
 
   // Reset transforms for non-current slides; current is controlled by zoomState
