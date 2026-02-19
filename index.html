@@ -2,9 +2,6 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<!-- Prevent viewport zoom (fixes "zoomed page -> zoomed overlay" on mobile). -->
-<!-- Note: disabling user scaling is an accessibility tradeoff; re-enable if you need it. -->
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Gallery</title>
 
 <style>
@@ -14,7 +11,6 @@
 
   html, body {
     height: 100%;
-    touch-action: pan-x pan-y; /* helps prevent pinch-zoom in supporting browsers */
   }
 
   body {
@@ -307,12 +303,6 @@
 </div>
 
 <script>
-// iOS Safari: prevent viewport pinch-zoom (gesture events exist only there)
-// This avoids opening the overlay in an already zoomed page state.
-document.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
-document.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });
-document.addEventListener("gestureend", (e) => e.preventDefault(), { passive: false });
-
 // Global set id (controlled in this file).
 // Change this value (and redeploy) to roll a new stable "set" for all users of that deployed version.
 const SET_ID = "set2";
