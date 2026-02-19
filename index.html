@@ -342,7 +342,7 @@ const tilesOnScreen = imagesToShow + 1; // 10 photos + 1 text tile
 // Swipe / animated navigation (Telegram-like)
 const SLIDE_GAP_PX = 10; // small spacing between photos during swipe
 const SWIPE_THRESHOLD_RATIO = 0.5; // 50% of viewport width
-const SLIDE_ANIM_MS = 220; // quick but smooth
+const SLIDE_ANIM_MS = 500; // slower (2x) for smoother swipe
 
 const prevSlide = overlayPrevImg.parentElement;
 const currSlide = overlayCurrImg.parentElement;
