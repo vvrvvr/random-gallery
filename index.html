@@ -236,25 +236,21 @@
     /* transform is controlled by JS for pinch-zoom + pan */
     transform-origin: center center;
     will-change: transform;
-    opacity: 0;
+    opacity: 1; /* avoid blink on fast src swaps */
     pointer-events: auto; /* still allow starting a drag from the photo */
     user-select: none;
     -webkit-user-drag: none;
-  }
-
-  .slide img.loaded {
-    opacity: 1;
   }
 
   /* Overlay photos: smooth snap-back / double-tap zoom; disable during active dragging */
   .overlay-photo {
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
-    transition: opacity 160ms ease, transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1);
+    transition: transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1);
   }
 
   .stage.dragging .overlay-photo {
-    transition: opacity 160ms ease; /* no transform tween while finger is down */
+    transition: none; /* no tween while finger is down */
   }
 
   /* .overlay.active .slide img transform removed: JS handles zoom */
@@ -609,31 +605,22 @@ function updateOverlaySlides() {
   const iCurr = wrapIndex(currentIndex);
   const iNext = wrapIndex(currentIndex + 1);
 
-  overlayPrevImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayPrevImg, selectedImages[iPrev], () => {
     overlayPrevImg.removeAttribute("src");
     delete overlayPrevImg.dataset.num;
     delete overlayPrevImg.dataset.ext;
-  }, () => {
-    overlayPrevImg.classList.add("loaded");
   });
 
-  overlayCurrImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayCurrImg, selectedImages[iCurr], () => {
     overlayCurrImg.removeAttribute("src");
     delete overlayCurrImg.dataset.num;
     delete overlayCurrImg.dataset.ext;
-  }, () => {
-    overlayCurrImg.classList.add("loaded");
   });
 
-  overlayNextImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayNextImg, selectedImages[iNext], () => {
     overlayNextImg.removeAttribute("src");
     delete overlayNextImg.dataset.num;
     delete overlayNextImg.dataset.ext;
-  }, () => {
-    overlayNextImg.classList.add("loaded");
   });
 
   // Reset transforms for non-current slides; current is controlled by zoomState
@@ -659,13 +646,13 @@ function animateBy(delta) {
   swipe.timer = window.setTimeout(() => {
     if (token !== swipe.animToken) return;
     currentIndex = wrapIndex(currentIndex + delta);
+    // snap back to the centered state without animation
+    setSlideTransform(0, { animate: false });
     updateCounter();
     updateOverlaySlides();
     resetZoom();
     requestAnimationFrame(updateZoomBaseSize);
     prefetchAround();
-    // snap back to the centered state without animation
-    setSlideTransform(0, { animate: false });
     swipe.dx = 0;
     swipe.animDelta = 0;
     swipe.animating = false;
