@@ -231,16 +231,15 @@
     height: auto;
     object-fit: contain;
     box-shadow: 0 8px 22px rgba(0,0,0,0.28);
-    transform: scale(0.96);
-    transition: transform 0.18s ease;
+    /* transform is controlled by JS for pinch-zoom + pan */
+    transform-origin: center center;
+    will-change: transform;
     pointer-events: auto; /* still allow starting a drag from the photo */
     user-select: none;
     -webkit-user-drag: none;
   }
 
-  .overlay.active .slide img {
-    transform: scale(1);
-  }
+  /* .overlay.active .slide img transform removed: JS handles zoom */
 
   /* Навигационные кнопки */
   .nav-btn {
@@ -365,6 +364,183 @@ const swipe = {
   lastMoveAt: 0,
 };
 
+// Pinch-zoom + pan (Telegram-like)
+const zoomState = {
+  mode: "none", // "none" | "swipe" | "pan" | "pinch"
+  pointers: new Map(), // pointerId -> { x, y }
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+  baseW: 0,
+  baseH: 0,
+  lastX: 0,
+  lastY: 0,
+  pinchStartDist: 0,
+  pinchStartZoom: 1,
+  pinchLastMidX: 0,
+  pinchLastMidY: 0,
+  maxZoom: 3.25,
+  // double-tap
+  lastTapAt: 0,
+  lastTapX: 0,
+  lastTapY: 0,
+  doubleTapZoom: 2.2,
+};
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function applyZoom() {
+  overlayCurrImg.style.transition = "none";
+  overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
+}
+
+function updateZoomBaseSize() {
+  // Measure at zoom=1/pan=0 only
+  const prevZoom = zoomState.zoom;
+  const prevPanX = zoomState.panX;
+  const prevPanY = zoomState.panY;
+  zoomState.zoom = 1;
+  zoomState.panX = 0;
+  zoomState.panY = 0;
+  applyZoom();
+
+  const r = overlayCurrImg.getBoundingClientRect();
+  zoomState.baseW = r.width || zoomState.baseW || 0;
+  zoomState.baseH = r.height || zoomState.baseH || 0;
+
+  zoomState.zoom = prevZoom;
+  zoomState.panX = prevPanX;
+  zoomState.panY = prevPanY;
+  applyZoom();
+}
+
+function clampPan() {
+  const stageRect = stage.getBoundingClientRect();
+  const sw = stageRect.width || stageWidth();
+  const sh = stageRect.height || window.innerHeight;
+  const bw = zoomState.baseW || overlayCurrImg.getBoundingClientRect().width || sw;
+  const bh = zoomState.baseH || overlayCurrImg.getBoundingClientRect().height || sh;
+
+  const w = bw * zoomState.zoom;
+  const h = bh * zoomState.zoom;
+  const maxX = Math.max(0, (w - sw) / 2);
+  const maxY = Math.max(0, (h - sh) / 2);
+
+  zoomState.panX = clamp(zoomState.panX, -maxX, maxX);
+  zoomState.panY = clamp(zoomState.panY, -maxY, maxY);
+}
+
+function getPanBounds() {
+  const stageRect = stage.getBoundingClientRect();
+  const sw = stageRect.width || stageWidth();
+  const sh = stageRect.height || window.innerHeight;
+  const bw = zoomState.baseW || overlayCurrImg.getBoundingClientRect().width || sw;
+  const bh = zoomState.baseH || overlayCurrImg.getBoundingClientRect().height || sh;
+
+  const w = bw * zoomState.zoom;
+  const h = bh * zoomState.zoom;
+  return {
+    maxX: Math.max(0, (w - sw) / 2),
+    maxY: Math.max(0, (h - sh) / 2),
+    sw,
+    sh,
+  };
+}
+
+function withRubberBand(value, maxAbs, k = 0.35) {
+  const a = Math.abs(value);
+  if (a <= maxAbs) return value;
+  const s = value < 0 ? -1 : 1;
+  return s * (maxAbs + (a - maxAbs) * k);
+}
+
+function applyPanWithResistance() {
+  const { maxX, maxY } = getPanBounds();
+  zoomState.panX = withRubberBand(zoomState.panX, maxX);
+  zoomState.panY = withRubberBand(zoomState.panY, maxY);
+  applyZoom();
+}
+
+function snapPanBack() {
+  const { maxX, maxY } = getPanBounds();
+  const targetX = clamp(zoomState.panX, -maxX, maxX);
+  const targetY = clamp(zoomState.panY, -maxY, maxY);
+  zoomState.panX = targetX;
+  zoomState.panY = targetY;
+  overlayCurrImg.style.transition = "transform 180ms cubic-bezier(0.2, 0.9, 0.2, 1)";
+  overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
+  window.setTimeout(() => {
+    overlayCurrImg.style.transition = "none";
+  }, 220);
+}
+
+function resetZoom() {
+  zoomState.zoom = 1;
+  zoomState.panX = 0;
+  zoomState.panY = 0;
+  clampPan();
+  applyZoom();
+}
+
+function toggleZoomAt(clientX, clientY) {
+  const sr = stage.getBoundingClientRect();
+  const tapX = clientX - sr.left;
+  const tapY = clientY - sr.top;
+  const cx = sr.width / 2;
+  const cy = sr.height / 2;
+
+  if (zoomState.zoom > 1.02) {
+    zoomState.zoom = 1;
+    zoomState.panX = 0;
+    zoomState.panY = 0;
+  } else {
+    updateZoomBaseSize();
+    const z = clamp(zoomState.doubleTapZoom, 1, zoomState.maxZoom);
+    // Keep the tapped point in place while zooming (Telegram-like)
+    zoomState.zoom = z;
+    zoomState.panX = (tapX - cx) * (1 - z);
+    zoomState.panY = (tapY - cy) * (1 - z);
+    clampPan();
+  }
+
+  overlayCurrImg.style.transition = "transform 200ms cubic-bezier(0.2, 0.9, 0.2, 1)";
+  overlayCurrImg.style.transform = `translate3d(${zoomState.panX}px, ${zoomState.panY}px, 0) scale(${zoomState.zoom})`;
+  window.setTimeout(() => {
+    overlayCurrImg.style.transition = "none";
+  }, 240);
+}
+
+function addZoomPointer(e) {
+  zoomState.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+}
+
+function updateZoomPointer(e) {
+  const p = zoomState.pointers.get(e.pointerId);
+  if (!p) return;
+  p.x = e.clientX;
+  p.y = e.clientY;
+}
+
+function removeZoomPointer(e) {
+  zoomState.pointers.delete(e.pointerId);
+}
+
+function getTwoZoomPointers() {
+  const it = zoomState.pointers.values();
+  const p1 = it.next().value;
+  const p2 = it.next().value;
+  if (!p1 || !p2) return null;
+  return [p1, p2];
+}
+
+function dist2(p1, p2) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
 function getCurrentDxPx() {
   const t = window.getComputedStyle(currSlide).transform;
   if (!t || t === "none") return 0;
@@ -451,6 +627,10 @@ function updateOverlaySlides() {
     delete overlayNextImg.dataset.num;
     delete overlayNextImg.dataset.ext;
   });
+
+  // Reset transforms for non-current slides; current is controlled by zoomState
+  overlayPrevImg.style.transform = "translate3d(0,0,0) scale(1)";
+  overlayNextImg.style.transform = "translate3d(0,0,0) scale(1)";
 }
 
 function animateBy(delta) {
@@ -472,6 +652,8 @@ function animateBy(delta) {
     currentIndex = wrapIndex(currentIndex + delta);
     updateCounter();
     updateOverlaySlides();
+    resetZoom();
+    requestAnimationFrame(updateZoomBaseSize);
     // snap back to the centered state without animation
     setSlideTransform(0, { animate: false });
     swipe.dx = 0;
@@ -497,6 +679,10 @@ function closeOverlay() {
   overlay.classList.remove("active");
   // Reset swipe state so next open starts centered
   cancelSwipeAnimation();
+  zoomState.pointers.clear();
+  zoomState.mode = "none";
+  zoomState.lastTapAt = 0;
+  resetZoom();
   swipe.active = false;
   swipe.pointerId = null;
   swipe.dx = 0;
@@ -1063,9 +1249,12 @@ function createTextTile() {
 function showImage(index) {
   const count = selectedImages.length;
   if (!count) return;
+  if (swipe.animating) cancelSwipeAnimation();
   currentIndex = (index + count) % count; // cyclic
   updateCounter();
   updateOverlaySlides();
+  resetZoom();
+  requestAnimationFrame(updateZoomBaseSize);
   setSlideTransform(0, { animate: false });
   swipe.dx = 0;
 }
@@ -1192,24 +1381,12 @@ nextBtn.addEventListener("click", (e) => {
   showImage(currentIndex + 1);
 });
 
-// Swipe + close on background tap
+// Swipe + pinch-zoom + close on background tap (Telegram-like)
 stage.addEventListener("pointerdown", (e) => {
   if (!overlay.classList.contains("active")) return;
-  // If animation is still running, allow "grab" mid-flight (Telegram-like).
   if (swipe.animating) cancelSwipeAnimation();
 
-  swipe.active = true;
-  swipe.pointerId = e.pointerId;
-  // Continue dragging from the current translateX
-  swipe.startX = e.clientX - (swipe.dx || 0);
-  swipe.suppressClick = false;
-  swipe.startAt = performance.now();
-  swipe.lastMoveAt = swipe.startAt;
-  swipe.lastX = e.clientX;
-  swipe.vx = 0;
-
-  stage.classList.add("dragging");
-  setSlideTransform(swipe.dx || 0, { animate: false });
+  addZoomPointer(e);
 
   try {
     stage.setPointerCapture(e.pointerId);
@@ -1217,7 +1394,56 @@ stage.addEventListener("pointerdown", (e) => {
     // ignore
   }
 
-  // Prevent long-press selection / browser gestures
+  swipe.suppressClick = false;
+  stage.classList.add("dragging");
+
+  // Two pointers => pinch zoom
+  if (zoomState.pointers.size >= 2) {
+    zoomState.mode = "pinch";
+    swipe.active = false;
+    swipe.pointerId = null;
+    swipe.dx = 0;
+    setSlideTransform(0, { animate: false });
+
+    const pts = getTwoZoomPointers();
+    if (pts) {
+      const [p1, p2] = pts;
+      zoomState.pinchStartDist = Math.max(1, dist2(p1, p2));
+      zoomState.pinchStartZoom = zoomState.zoom;
+      const sr = stage.getBoundingClientRect();
+      zoomState.pinchLastMidX = ((p1.x + p2.x) / 2) - sr.left;
+      zoomState.pinchLastMidY = ((p1.y + p2.y) / 2) - sr.top;
+    }
+
+    updateZoomBaseSize();
+    clampPan();
+    applyZoom();
+    e.preventDefault();
+    return;
+  }
+
+  // One pointer: if zoomed-in => pan, else => swipe
+  if (zoomState.zoom > 1.01) {
+    zoomState.mode = "pan";
+    zoomState.lastX = e.clientX;
+    zoomState.lastY = e.clientY;
+    updateZoomBaseSize();
+    clampPan();
+    applyZoom();
+    e.preventDefault();
+    return;
+  }
+
+  zoomState.mode = "swipe";
+  swipe.active = true;
+  swipe.pointerId = e.pointerId;
+  swipe.startX = e.clientX - (swipe.dx || 0);
+  swipe.startAt = performance.now();
+  swipe.lastMoveAt = swipe.startAt;
+  swipe.lastX = e.clientX;
+  swipe.vx = 0;
+  setSlideTransform(swipe.dx || 0, { animate: false });
+
   e.preventDefault();
 }, { capture: true });
 
@@ -1228,24 +1454,79 @@ overlayCurrImg.addEventListener("dragstart", (e) => e.preventDefault());
 overlayNextImg.addEventListener("dragstart", (e) => e.preventDefault());
 
 stage.addEventListener("pointermove", (e) => {
-  if (!swipe.active) return;
-  if (swipe.pointerId !== e.pointerId) return;
+  if (!overlay.classList.contains("active")) return;
+  if (!zoomState.pointers.has(e.pointerId)) return;
 
-  const now = performance.now();
-  const dx = e.clientX - swipe.startX;
-  swipe.dx = dx;
-  const dt = Math.max(1, now - swipe.lastMoveAt);
-  const step = e.clientX - swipe.lastX;
-  const instVx = step / dt; // px/ms
-  // Smooth velocity to reduce jitter
-  swipe.vx = swipe.vx * 0.8 + instVx * 0.2;
-  swipe.lastMoveAt = now;
-  swipe.lastX = e.clientX;
+  updateZoomPointer(e);
 
-  if (Math.abs(dx) > 2) swipe.suppressClick = true;
-  setSlideTransform(dx, { animate: false });
+  if (zoomState.mode === "pinch") {
+    const pts = getTwoZoomPointers();
+    if (!pts) return;
+    const [p1, p2] = pts;
+    const sr = stage.getBoundingClientRect();
+    const midX = ((p1.x + p2.x) / 2) - sr.left;
+    const midY = ((p1.y + p2.y) / 2) - sr.top;
+    const oldZoom = zoomState.zoom;
 
-  e.preventDefault();
+    const dist = Math.max(1, dist2(p1, p2));
+    const nextZoom = clamp(
+      zoomState.pinchStartZoom * (dist / Math.max(1, zoomState.pinchStartDist)),
+      1,
+      zoomState.maxZoom
+    );
+
+    // Move with fingers + compensate scaling around midpoint
+    zoomState.panX += (midX - zoomState.pinchLastMidX);
+    zoomState.panY += (midY - zoomState.pinchLastMidY);
+    const cx = sr.width / 2;
+    const cy = sr.height / 2;
+    if (oldZoom > 0) {
+      zoomState.panX += (midX - cx) * (1 - nextZoom / oldZoom);
+      zoomState.panY += (midY - cy) * (1 - nextZoom / oldZoom);
+    }
+
+    zoomState.zoom = nextZoom;
+    zoomState.pinchLastMidX = midX;
+    zoomState.pinchLastMidY = midY;
+
+    applyPanWithResistance();
+    swipe.suppressClick = true;
+    e.preventDefault();
+    return;
+  }
+
+  if (zoomState.mode === "pan") {
+    const dx = e.clientX - zoomState.lastX;
+    const dy = e.clientY - zoomState.lastY;
+    zoomState.lastX = e.clientX;
+    zoomState.lastY = e.clientY;
+    zoomState.panX += dx;
+    zoomState.panY += dy;
+    applyPanWithResistance();
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) swipe.suppressClick = true;
+    e.preventDefault();
+    return;
+  }
+
+  if (zoomState.mode === "swipe") {
+    if (!swipe.active) return;
+    if (swipe.pointerId !== e.pointerId) return;
+
+    const now = performance.now();
+    const dx = e.clientX - swipe.startX;
+    swipe.dx = dx;
+    const dt = Math.max(1, now - swipe.lastMoveAt);
+    const step = e.clientX - swipe.lastX;
+    const instVx = step / dt; // px/ms
+    swipe.vx = swipe.vx * 0.8 + instVx * 0.2;
+    swipe.lastMoveAt = now;
+    swipe.lastX = e.clientX;
+
+    if (Math.abs(dx) > 2) swipe.suppressClick = true;
+    setSlideTransform(dx, { animate: false });
+
+    e.preventDefault();
+  }
 }, { capture: true });
 
 function finishSwipe() {
@@ -1294,24 +1575,83 @@ function finishSwipe() {
 }
 
 stage.addEventListener("pointerup", (e) => {
-  if (swipe.pointerId !== e.pointerId) return;
+  if (!zoomState.pointers.has(e.pointerId)) return;
   try {
     stage.releasePointerCapture(e.pointerId);
   } catch {
     // ignore
   }
-  finishSwipe();
+
+  removeZoomPointer(e);
+
+  if (zoomState.mode === "swipe" && swipe.pointerId === e.pointerId) {
+    finishSwipe();
+    zoomState.mode = "none";
+    e.preventDefault();
+    return;
+  }
+
+  // End pan/pinch
+  if (zoomState.pointers.size === 0) {
+    stage.classList.remove("dragging");
+    if (zoomState.zoom <= 1.02) resetZoom();
+    else snapPanBack();
+    zoomState.mode = "none";
+  } else if (zoomState.pointers.size === 1) {
+    // If one finger remains after pinch, continue panning if zoomed in
+    const remaining = zoomState.pointers.values().next().value;
+    if (zoomState.zoom > 1.01 && remaining) {
+      zoomState.mode = "pan";
+      zoomState.lastX = remaining.x;
+      zoomState.lastY = remaining.y;
+    } else {
+      resetZoom();
+      zoomState.mode = "swipe";
+      // user can continue with a new touch for swipe
+      swipe.active = false;
+      swipe.pointerId = null;
+    }
+  }
+
+  // Double-tap (only when gesture ended with a single pointer and no drag)
+  if (zoomState.pointers.size === 0 && e.target && e.target.closest && e.target.closest(".overlay-photo")) {
+    const now = performance.now();
+    const dt = now - zoomState.lastTapAt;
+    const dx = e.clientX - zoomState.lastTapX;
+    const dy = e.clientY - zoomState.lastTapY;
+    const closeEnough = (dx * dx + dy * dy) < (28 * 28);
+
+    if (!swipe.suppressClick && dt > 0 && dt < 280 && closeEnough) {
+      // Trigger zoom toggle
+      swipe.suppressClick = true;
+      zoomState.lastTapAt = 0;
+      toggleZoomAt(e.clientX, e.clientY);
+      e.preventDefault();
+      return;
+    }
+
+    // store tap
+    zoomState.lastTapAt = now;
+    zoomState.lastTapX = e.clientX;
+    zoomState.lastTapY = e.clientY;
+  }
+
   e.preventDefault();
 }, { capture: true });
 
 stage.addEventListener("pointercancel", (e) => {
-  if (swipe.pointerId !== e.pointerId) return;
   try {
     stage.releasePointerCapture(e.pointerId);
   } catch {
     // ignore
   }
-  finishSwipe();
+  if (zoomState.mode === "swipe" && swipe.pointerId === e.pointerId) {
+    finishSwipe();
+  }
+  removeZoomPointer(e);
+  stage.classList.remove("dragging");
+  if (zoomState.zoom <= 1.02) resetZoom();
+  zoomState.mode = "none";
   e.preventDefault();
 }, { capture: true });
 
@@ -1324,6 +1664,19 @@ stage.addEventListener("click", (e) => {
   if (e.target && e.target.closest && e.target.closest(".overlay-photo")) return;
   closeOverlay();
 });
+
+// Desktop: double click to zoom
+stage.addEventListener("dblclick", (e) => {
+  if (!overlay.classList.contains("active")) return;
+  if (e.target && e.target.closest && e.target.closest(".overlay-photo")) {
+    swipe.suppressClick = true;
+    toggleZoomAt(e.clientX, e.clientY);
+    e.preventDefault();
+  }
+}, { capture: true });
+
+// Re-measure base size when the current image loads (important for correct pan bounds)
+overlayCurrImg.addEventListener("load", () => requestAnimationFrame(updateZoomBaseSize));
 
 // Кнопка закрытия всегда поверх изображения
 closeBtn.addEventListener("click", (e) => {
