@@ -145,7 +145,7 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20,20,20,0.95);
+    background: rgba(0,0,0,0.9);
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.18s ease;
@@ -222,7 +222,7 @@
     justify-content: center;
     will-change: transform;
     pointer-events: auto;
-    background: rgba(238, 241, 245, 0.22);
+    background: transparent; /* let the overlay's dark background show through */
     overflow: hidden;
   }
 
