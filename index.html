@@ -222,6 +222,29 @@
     justify-content: center;
     will-change: transform;
     pointer-events: auto;
+    background: rgba(238, 241, 245, 0.22);
+    overflow: hidden;
+  }
+
+  /* Overlay slide placeholder (while image is loading) */
+  .slide::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      rgba(255,255,255,0) 0%,
+      rgba(255,255,255,0.35) 50%,
+      rgba(255,255,255,0) 100%
+    );
+    transform: translateX(-100%);
+    animation: shimmer 1.2s ease-in-out infinite;
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .slide.loaded::before {
+    display: none;
   }
 
   .slide img {
@@ -234,9 +257,15 @@
     /* transform is controlled by JS for pinch-zoom + pan */
     transform-origin: center center;
     will-change: transform;
+    opacity: 0;
+    transition: opacity 160ms ease;
     pointer-events: auto; /* still allow starting a drag from the photo */
     user-select: none;
     -webkit-user-drag: none;
+  }
+
+  .slide img.loaded {
+    opacity: 1;
   }
 
   /* .overlay.active .slide img transform removed: JS handles zoom */
@@ -610,22 +639,37 @@ function updateOverlaySlides() {
   const iCurr = wrapIndex(currentIndex);
   const iNext = wrapIndex(currentIndex + 1);
 
+  prevSlide.classList.remove("loaded");
+  overlayPrevImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayPrevImg, selectedImages[iPrev], () => {
     overlayPrevImg.removeAttribute("src");
     delete overlayPrevImg.dataset.num;
     delete overlayPrevImg.dataset.ext;
+  }, () => {
+    overlayPrevImg.classList.add("loaded");
+    prevSlide.classList.add("loaded");
   });
 
+  currSlide.classList.remove("loaded");
+  overlayCurrImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayCurrImg, selectedImages[iCurr], () => {
     overlayCurrImg.removeAttribute("src");
     delete overlayCurrImg.dataset.num;
     delete overlayCurrImg.dataset.ext;
+  }, () => {
+    overlayCurrImg.classList.add("loaded");
+    currSlide.classList.add("loaded");
   });
 
+  nextSlide.classList.remove("loaded");
+  overlayNextImg.classList.remove("loaded");
   setImgSrcWithFallback(overlayNextImg, selectedImages[iNext], () => {
     overlayNextImg.removeAttribute("src");
     delete overlayNextImg.dataset.num;
     delete overlayNextImg.dataset.ext;
+  }, () => {
+    overlayNextImg.classList.add("loaded");
+    nextSlide.classList.add("loaded");
   });
 
   // Reset transforms for non-current slides; current is controlled by zoomState
@@ -654,6 +698,7 @@ function animateBy(delta) {
     updateOverlaySlides();
     resetZoom();
     requestAnimationFrame(updateZoomBaseSize);
+    prefetchAround();
     // snap back to the centered state without animation
     setSlideTransform(0, { animate: false });
     swipe.dx = 0;
@@ -854,7 +899,7 @@ function imageUrl(num, ext) {
   return `${IMAGES_DIR}/${num}${ext}`;
 }
 
-function setImgSrcWithFallback(imgEl, num, onMissing) {
+function setImgSrcWithFallback(imgEl, num, onMissing, onLoaded) {
   const desiredNum = String(num);
   const primaryUrl = imageUrl(num, EXT_PRIMARY);
   const fallbackUrl = imageUrl(num, EXT_FALLBACK);
@@ -863,6 +908,13 @@ function setImgSrcWithFallback(imgEl, num, onMissing) {
   imgEl.dataset.ext = "primary";
   imgEl.src = primaryUrl;
 
+  const prevOnload = imgEl.onload;
+  imgEl.onload = (...args) => {
+    if (typeof prevOnload === "function") prevOnload(...args);
+    if (typeof onLoaded === "function") onLoaded();
+  };
+
+  const prevOnerror = imgEl.onerror;
   imgEl.onerror = () => {
     if (imgEl.dataset.ext === "primary") {
       imgEl.dataset.ext = "fallback";
@@ -871,7 +923,38 @@ function setImgSrcWithFallback(imgEl, num, onMissing) {
     }
     // missing/broken
     if (typeof onMissing === "function") onMissing();
+    if (typeof prevOnerror === "function") prevOnerror();
   };
+}
+
+// Prefetch a few images ahead/behind so fast swipes don't hit blank frames on slow mobile networks.
+const prefetchCache = new Set();
+function prefetchImage(num) {
+  const key = String(num);
+  if (prefetchCache.has(key)) return;
+  prefetchCache.add(key);
+
+  const img = new Image();
+  img.decoding = "async";
+  img.onload = () => {};
+  img.onerror = () => {
+    const img2 = new Image();
+    img2.decoding = "async";
+    img2.src = imageUrl(num, EXT_FALLBACK);
+  };
+  img.src = imageUrl(num, EXT_PRIMARY);
+}
+
+function prefetchAround() {
+  const count = selectedImages.length;
+  if (!count) return;
+  const radius = 3;
+  for (let d = 1; d <= radius; d++) {
+    const n1 = selectedImages[wrapIndex(currentIndex + d)];
+    const n2 = selectedImages[wrapIndex(currentIndex - d)];
+    if (n1) prefetchImage(n1);
+    if (n2) prefetchImage(n2);
+  }
 }
 
 async function probeImageNumber(num) {
@@ -1255,6 +1338,7 @@ function showImage(index) {
   updateOverlaySlides();
   resetZoom();
   requestAnimationFrame(updateZoomBaseSize);
+  prefetchAround();
   setSlideTransform(0, { animate: false });
   swipe.dx = 0;
 }
